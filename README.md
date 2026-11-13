@@ -16,15 +16,15 @@ In high-dimensional embedding spaces, standard vector retrieval treats semantic 
 `ai-vector-shield` solves this by lifting embedding vectors into Complex Projective Manifolds ($\mathbb{CP}^d$) and decomposing them across **Piecewise-Local Coordinate Charts**:
 
 ```text
-┌────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐
-│ Inbound RAG Query  │ ───► │ Complex Projective Map │ ───► │   Chart Verification   │
-│ or Ingested Vector │      │      (CP^d Charts)     │      │ (Sub-ms CPU Telemetry) │
-└────────────────────┘      └────────────────────────┘      └───────────┬────────────┘
-                                                                        │
-                                             ┌──────────────────────────┴──────────────────────────┐
-                                             ▼                                                     ▼
-                               [✅ PASS: Inside Chart]                               [🚨 BLOCK / SHADOW FLAG]
-                             Route to Vector DB / LLM Context                        Drop or Emit Audit Event
+┌────────────────────┐     ┌────────────────────────┐     ┌──────────────────────────┐
+│ Inbound RAG Query  │ ──► │ Complex Projective Map │ ──► │    Chart Verification    │
+│ or Ingested Vector │     │     (CP^d Charts)      │     │  (Sub-ms CPU Telemetry)  │
+└────────────────────┘     └────────────────────────┘     └────────────┬─────────────┘
+                                                                       │
+                  ┌────────────────────────────────────────────────────┴─────┐
+                  ▼                                                          ▼
+      [✅ PASS: Inside Chart]                                    [🚨 BLOCK / SHADOW: OOD]
+   Route to Vector DB / LLM Context                           Drop or Emit Audit Telemetry
 ```
 
 ## 💰 Executive ROI & Latency Benchmark (10M Queries / Month)
