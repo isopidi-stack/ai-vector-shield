@@ -16,7 +16,7 @@ In high-dimensional embedding spaces, standard vector retrieval treats semantic 
 `ai-vector-shield` solves this by lifting embedding vectors into Complex Projective Manifolds ($\mathbb{CP}^d$) and decomposing them across **Piecewise-Local Coordinate Charts**:
 
 ```
-text
+```text
 ┌────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐
 │ Inbound RAG Query  │ ───► │ Complex Projective Map │ ───► │   Chart Verification   │
 │ or Ingested Vector │      │      (CP^d Charts)     │      │ (Sub-ms CPU Telemetry) │
@@ -41,7 +41,7 @@ Secondary 8B LLM guardrails add **150–400 ms** of latency per query and requir
 Reproduce on your own hardware in seconds:
 
 ```
-bash
+```bash
 python examples/roi_benchmark.py
 ```
 
@@ -56,7 +56,7 @@ python examples/roi_benchmark.py
 ## 📦 Installation
 
 ```
-bash
+```bash
 git clone https://github.com/isopidi-stack/ai-vector-shield.git
 cd ai-vector-shield
 pip install -e . sentence-transformers
@@ -65,7 +65,7 @@ pip install -e . sentence-transformers
 ## 🚀 Quickstart (Enforce, Shadow Mode & Telemetry)
 
 ```
-python
+```python
 from sentence_transformers import SentenceTransformer
 from ai_vector_shield import VectorShield
 
@@ -100,7 +100,7 @@ for text, diag in zip(inbound_queries, diagnostics):
 Deploy `ai-vector-shield` in front of Qdrant, Pinecone, Milvus, or pgvector across any backend language (Go, TypeScript, Java, Python):
 
 ```
-bash
+```bash
 docker build -t ai-vector-shield .
 docker run -p 8000:8000 -e VECTOR_SHIELD_MODE=enforce ai-vector-shield
 ```
@@ -114,7 +114,7 @@ Endpoints exposed out of the box:
 ## 🧪 Benchmarks & Test Suite
 
 ```
-bash
+```bash
 python -m unittest discover -s tests -v
 python examples/roi_benchmark.py
 python examples/quickstart.py
