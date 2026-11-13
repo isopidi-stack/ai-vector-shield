@@ -1,4 +1,5 @@
-﻿import torch
+﻿import math
+import torch
 import numpy as np
 from sklearn.cluster import KMeans
 
@@ -44,10 +45,11 @@ class AIVectorShield:
 
         for k in range(self.n_clusters):
             cluster_mask = (labels == k)
-            if cluster_mask.sum() < effective_rank:
+            if cluster_mask.sum() < effective_rank + 2:
                 cluster_mask = np.ones_like(labels, dtype=bool)
 
             cluster_z = z[cluster_mask]
+            n_k = int(cluster_z.shape[0])
             mean = cluster_z.mean(dim=0, keepdim=True)
             centered = cluster_z - mean
 
@@ -58,14 +60,20 @@ class AIVectorShield:
             basis = V[:rank]
 
             res = self._chart_residual(cluster_z, mean, basis)
-            thresh = torch.quantile(res, self.quantile).item()
+            raw_q = torch.quantile(res, self.quantile).item()
+
+            # Finite-sample & subspace degrees-of-freedom correction for unseen test queries
+            dof_dim = math.sqrt(max(1.0, (self.dim - 1.0) / max(1.0, self.dim - 1.0 - rank)))
+            dof_sample = math.sqrt((n_k + 1.0) / max(1.0, n_k - rank - 1.0))
+            thresh = raw_q * dof_dim * dof_sample
+
             self.charts.append({
                 "mean_real": mean.real.contiguous(),
                 "mean_imag": mean.imag.contiguous(),
                 "basis": basis.contiguous(),
                 "threshold": float(thresh),
             })
-            residuals.append(res)
+            residuals.append(res * (dof_dim * dof_sample))
 
         all_res = torch.cat(residuals)
         self.global_threshold = torch.quantile(all_res, self.quantile).item()
