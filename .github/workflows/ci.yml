@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+
+env:
+  PYTHONPATH: "."
 
 jobs:
   test-and-benchmark:
@@ -29,7 +32,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install numpy scikit-learn
-          pip install -e . --no-deps
 
       - name: Run unit test suite
         run: python -m unittest discover -s tests -v
