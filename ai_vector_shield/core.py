@@ -1,4 +1,4 @@
-﻿import math
+import math
 import torch
 import numpy as np
 from sklearn.cluster import KMeans
@@ -26,7 +26,11 @@ class AIVectorShield:
         return x
 
     def _to_complex_projective(self, x: torch.Tensor) -> torch.Tensor:
+        if torch.is_complex(x):
+            return x / (torch.linalg.norm(x, dim=-1, keepdim=True) + 1e-8)
         x_norm = x / (x.norm(dim=-1, keepdim=True) + 1e-8)
+        if x_norm.shape[-1] % 2 == 0:
+            return torch.complex(x_norm[..., 0::2], x_norm[..., 1::2])
         return torch.complex(x_norm, torch.zeros_like(x_norm))
 
     def fit(self, embeddings: torch.Tensor):
