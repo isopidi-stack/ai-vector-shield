@@ -1,4 +1,5 @@
-﻿import torch
+﻿import time
+import torch
 import numpy as np
 from .core import AIVectorShield
 
@@ -7,10 +8,19 @@ class VectorShield:
     Enterprise Vector Firewall for RAG pipelines powered by piecewise-local
     complex projective manifold verification.
     """
-    def __init__(self, latent_rank: int = 8, n_clusters: int = 3, quantile: float = 0.99):
+    def __init__(
+        self,
+        latent_rank: int = 8,
+        n_clusters: int = 3,
+        quantile: float = 0.99,
+        mode: str = "enforce",
+    ):
+        if mode not in ("enforce", "shadow"):
+            raise ValueError("mode must be 'enforce' or 'shadow'")
         self.latent_rank = latent_rank
         self.n_clusters = n_clusters
         self.quantile = quantile
+        self.mode = mode
         self._shield = None
         self._is_fitted = False
 
@@ -38,27 +48,38 @@ class VectorShield:
         if not self._is_fitted:
             raise RuntimeError("Shield is not fitted. Call fit() or load() first.")
         predictions = self._shield.verify(query_embeddings)
+        if self.mode == "shadow":
+            return np.ones(predictions.shape[0], dtype=bool)
         return predictions.cpu().numpy().astype(bool)
 
     def inspect(self, query_embeddings):
-        """Returns structured per-sample security diagnostics (allowed, residual, risk_ratio, chart_id)."""
+        """Returns structured per-sample security diagnostics with latency telemetry."""
         if not self._is_fitted:
             raise RuntimeError("Shield is not fitted. Call fit() or load() first.")
+        t0 = time.perf_counter()
         allowed, residuals, ratios, charts = self._shield.score_samples(query_embeddings)
-        return [
-            {
-                "allowed": bool(a),
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        per_sample_ms = elapsed_ms / max(1, allowed.shape[0])
+
+        results = []
+        for a, r, rat, c in zip(
+            allowed.cpu().tolist(),
+            residuals.cpu().tolist(),
+            ratios.cpu().tolist(),
+            charts.cpu().tolist(),
+        ):
+            is_inlier = bool(a)
+            action = "allow" if is_inlier else ("shadow_flagged" if self.mode == "shadow" else "blocked")
+            results.append({
+                "allowed": True if self.mode == "shadow" else is_inlier,
+                "in_manifold": is_inlier,
+                "action": action,
                 "residual": float(r),
                 "risk_ratio": float(rat),
                 "chart_id": int(c),
-            }
-            for a, r, rat, c in zip(
-                allowed.cpu().tolist(),
-                residuals.cpu().tolist(),
-                ratios.cpu().tolist(),
-                charts.cpu().tolist(),
-            )
-        ]
+                "latency_ms": round(per_sample_ms, 4),
+            })
+        return results
 
     def save(self, filepath: str):
         """Serializes fitted manifold charts using plain tensors (safe for weights_only=True)."""
@@ -69,19 +90,21 @@ class VectorShield:
             "latent_rank": int(self.latent_rank),
             "n_clusters": int(self.n_clusters),
             "quantile": float(self.quantile),
+            "mode": str(self.mode),
             "charts": self._shield.charts,
             "global_threshold": float(self._shield.global_threshold),
         }
         torch.save(state, filepath)
 
     @classmethod
-    def load(cls, filepath: str):
+    def load(cls, filepath: str, mode: str = None):
         """Loads a serialized VectorShield model safely with weights_only=True."""
         state = torch.load(filepath, map_location="cpu", weights_only=True)
         instance = cls(
             latent_rank=state["latent_rank"],
             n_clusters=state["n_clusters"],
             quantile=state["quantile"],
+            mode=mode or state.get("mode", "enforce"),
         )
         shield_core = AIVectorShield(
             dim=state["dim"],
