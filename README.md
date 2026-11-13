@@ -1,5 +1,10 @@
 ﻿# 🛡️ AI Vector Shield
 
+[![CI](https://github.com/isopidi-stack/ai-vector-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/isopidi-stack/ai-vector-shield/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/isopidi-stack/ai-vector-shield?color=blue)](https://github.com/isopidi-stack/ai-vector-shield/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+
 **Enterprise Vector Firewall for RAG Pipelines powered by Piecewise-Local Complex Projective Manifolds ($\mathbb{CP}^d$).**
 
 ## 🏛️ The Theoretical Foundation: Why Geometry Matters
@@ -52,7 +57,7 @@ python examples/roi_benchmark.py
 
 ```
 bash
-git clone [https://github.com/isopidi-stack/ai-vector-shield.git](https://github.com/isopidi-stack/ai-vector-shield.git)
+git clone https://github.com/isopidi-stack/ai-vector-shield.git
 cd ai-vector-shield
 pip install -e . sentence-transformers
 ```
@@ -129,3 +134,4 @@ python examples/extreme_stress_test.py
 ## 📄 License
 
 Released under the [MIT License](LICENSE).
+
