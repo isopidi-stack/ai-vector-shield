@@ -1,4 +1,4 @@
-import torch
+﻿import torch
 import numpy as np
 from sklearn.cluster import KMeans
 
@@ -15,16 +15,22 @@ class AIVectorShield:
         self.charts = []
         self.global_threshold = 0.0
 
+    def _validate_input(self, x) -> torch.Tensor:
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32)
+        if x.ndim == 1:
+            x = x.unsqueeze(0)
+        if x.shape[-1] != self.dim:
+            raise ValueError(f"Embedding dimension mismatch: expected {self.dim}, got {x.shape[-1]}.")
+        return x
+
     def _to_complex_projective(self, x: torch.Tensor) -> torch.Tensor:
         x_norm = x / (x.norm(dim=-1, keepdim=True) + 1e-8)
         return torch.complex(x_norm, torch.zeros_like(x_norm))
 
     def fit(self, embeddings: torch.Tensor):
-        if isinstance(embeddings, np.ndarray):
-            embeddings = torch.tensor(embeddings, dtype=torch.float32)
-        
+        embeddings = self._validate_input(embeddings)
         N = embeddings.shape[0]
-        # Prevent overfitting by ensuring latent rank leaves plenty of degrees of freedom
         effective_rank = min(self.latent_rank, max(2, N // (3 * self.n_clusters)))
 
         z = self._to_complex_projective(embeddings)
@@ -46,14 +52,19 @@ class AIVectorShield:
             centered = cluster_z - mean
 
             centered_matrix = torch.cat([centered.real, centered.imag], dim=-1)
-            U, S, V = torch.linalg.svd(centered_matrix, full_matrices=False)
-                
+            _, _, V = torch.linalg.svd(centered_matrix, full_matrices=False)
+
             rank = min(effective_rank, V.shape[0])
             basis = V[:rank]
 
             res = self._chart_residual(cluster_z, mean, basis)
-            thresh = torch.quantile(res, self.quantile)
-            self.charts.append((mean, basis, thresh))
+            thresh = torch.quantile(res, self.quantile).item()
+            self.charts.append({
+                "mean_real": mean.real.contiguous(),
+                "mean_imag": mean.imag.contiguous(),
+                "basis": basis.contiguous(),
+                "threshold": float(thresh),
+            })
             residuals.append(res)
 
         all_res = torch.cat(residuals)
@@ -65,17 +76,29 @@ class AIVectorShield:
         mat = torch.cat([centered.real, centered.imag], dim=-1)
         projected = torch.matmul(mat, basis.T)
         reconstructed = torch.matmul(projected, basis)
-        residual = torch.norm(mat - reconstructed, dim=-1)
-        return residual
+        return torch.norm(mat - reconstructed, dim=-1)
+
+    def score_samples(self, x: torch.Tensor):
+        x = self._validate_input(x)
+        z = self._to_complex_projective(x)
+
+        all_residuals = []
+        all_ratios = []
+        for chart in self.charts:
+            mean = torch.complex(chart["mean_real"].to(x.device), chart["mean_imag"].to(x.device))
+            basis = chart["basis"].to(x.device)
+            thresh = chart["threshold"]
+            r = self._chart_residual(z, mean, basis)
+            all_residuals.append(r)
+            all_ratios.append(r / (thresh + 1e-8))
+
+        ratios_stack = torch.stack(all_ratios, dim=-1)       # [N, K]
+        residuals_stack = torch.stack(all_residuals, dim=-1) # [N, K]
+        min_ratios, best_charts = torch.min(ratios_stack, dim=-1)
+        best_residuals = residuals_stack.gather(1, best_charts.unsqueeze(-1)).squeeze(-1)
+        allowed = min_ratios <= 1.0
+        return allowed, best_residuals, min_ratios, best_charts
 
     def verify(self, x: torch.Tensor) -> torch.Tensor:
-        if isinstance(x, np.ndarray):
-            x = torch.tensor(x, dtype=torch.float32)
-        z = self._to_complex_projective(x)
-        
-        allowed = torch.zeros(x.shape[0], dtype=torch.bool, device=x.device)
-        for mean, basis, thresh in self.charts:
-            r = self._chart_residual(z, mean, basis)
-            allowed |= (r <= thresh)
-            
+        allowed, _, _, _ = self.score_samples(x)
         return allowed

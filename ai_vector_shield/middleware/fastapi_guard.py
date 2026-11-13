@@ -1,20 +1,22 @@
-from fastapi import HTTPException, status
+﻿from fastapi import HTTPException, status
 from sentence_transformers import SentenceTransformer
 from ai_vector_shield import VectorShield
-import torch
 
 class FastAPIVectorFirewall:
     def __init__(self, shield_path: str, model_name: str = "all-MiniLM-L6-v2"):
-        print("[*] Loading VectorFirewall and embedding model for FastAPI...")
         self.shield = VectorShield.load(shield_path)
         self.model = SentenceTransformer(model_name)
 
-    def verify_query(self, query: str):
+    def verify_query(self, query: str) -> dict:
         emb = self.model.encode([query])
-        is_safe = self.shield.verify(emb)
-        if not is_safe[0]:
+        result = self.shield.inspect(emb)[0]
+        if not result["allowed"]:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Request blocked by AIVectorShield: Out-of-distribution data or potential prompt injection detected."
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Blocked by AIVectorShield: Out-of-distribution query or prompt injection detected.",
+                    "risk_ratio": round(result["risk_ratio"], 4),
+                    "chart_id": result["chart_id"],
+                },
             )
-        return True
+        return result
