@@ -1,13 +1,69 @@
-[build-system]
-requires = ["setuptools>=61.0.0", "wheel"]
+﻿[build-system]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-vector-shield"
 version = "0.1.0"
-description = "Enterprise Vector Firewall for RAG pipelines powered by piecewise-local complex projective manifolds."
+description = "Enterprise Vector Firewall for RAG Pipelines powered by Piecewise-Local Complex Projective Manifolds (CP^d)."
 readme = "README.md"
-authors = [{ name = "Ivan", email = "ivan@example.com" }]
-license = { text = "MIT" }
-requires-python = ">=3.8"
-dependencies = ["torch>=2.0.0", "numpy>=1.20.0", "scikit-learn>=1.0.0", "scipy>=1.7.0"]
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [
+    { name = "isopidi-stack" }
+]
+keywords = [
+    "rag",
+    "ai-security",
+    "vector-database",
+    "prompt-injection",
+    "out-of-distribution",
+    "complex-projective-manifolds",
+    "twistor-theory",
+    "llm-guardrails"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Security"
+]
+dependencies = [
+    "torch>=2.0.0",
+    "numpy>=1.22.0",
+    "scikit-learn>=1.1.0"
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
+    "pydantic>=2.0.0"
+]
+middleware = [
+    "sentence-transformers>=2.2.0",
+    "langchain-core>=0.1.0",
+    "fastapi>=0.100.0"
+]
+all = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
+    "pydantic>=2.0.0",
+    "sentence-transformers>=2.2.0",
+    "langchain-core>=0.1.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/isopidi-stack/ai-vector-shield"
+Repository = "https://github.com/isopidi-stack/ai-vector-shield"
+Issues = "https://github.com/isopidi-stack/ai-vector-shield/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ai_vector_shield*"]
