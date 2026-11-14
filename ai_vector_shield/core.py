@@ -9,9 +9,9 @@ class AIVectorShield:
     Core engine for piecewise-local complex projective manifolds (\mathbb{CP}^d)
     providing vector-space security and out-of-distribution detection for RAG.
 
-    Implements native complex64 spinor pairing, Hermitian Fubini-Study tangent
-    space projection (z_perp = z - <mu | z> mu), and complex unitary SVD
-    subspace verification (V^H V).
+    Enforces a two-gate geometric invariant per local chart:
+      1. Transverse Subspace Incidence (off-manifold tangent residual orthogonal to mu)
+      2. Longitudinal Geodesic Drift (chord radius from chart ray mu)
     """
     def __init__(self, dim: int, latent_rank: int = 8, n_clusters: int = 3, quantile: float = 0.99):
         self.dim = dim
@@ -45,10 +45,10 @@ class AIVectorShield:
         effective_rank = min(self.latent_rank, max(2, N // (3 * self.n_clusters)))
 
         z = self._to_complex_projective(embeddings)
-        complex_dim = z.shape[-1]
-        z_np = torch.cat([z.real, z.imag], dim=-1).cpu().numpy()
+        z_real = torch.cat([z.real, z.imag], dim=-1)
+        D_eff = z_real.shape[-1]
 
-        kmeans = KMeans(n_clusters=self.n_clusters, n_init=10, random_state=42).fit(z_np)
+        kmeans = KMeans(n_clusters=self.n_clusters, n_init=10, random_state=42).fit(z_real.cpu().numpy())
         labels = kmeans.labels_
 
         self.charts = []
@@ -62,57 +62,59 @@ class AIVectorShield:
             cluster_z = z[cluster_mask]
             n_k = int(cluster_z.shape[0])
 
-            # Projective ray centroid normalized on the complex unit sphere
+            # Projective ray centroid normalized on the unit sphere
             raw_mean = cluster_z.mean(dim=0, keepdim=True)
             mu = raw_mean / (torch.linalg.norm(raw_mean, dim=-1, keepdim=True) + 1e-8)
 
-            # Hermitian Fubini-Study orthogonal tangent projection: z_perp = z - <mu | z> mu
-            inner = torch.sum(mu.conj() * cluster_z, dim=-1, keepdim=True)
-            z_perp = cluster_z - inner * mu
+            # True tangent projection orthogonal to mu (removes sphere radial curvature 1 - cos(theta))
+            mat_z = torch.cat([cluster_z.real, cluster_z.imag], dim=-1)
+            mat_mu = torch.cat([mu.real, mu.imag], dim=-1)
+            dot_mu = torch.sum(mat_z * mat_mu, dim=-1, keepdim=True)
+            tan_mat = mat_z - dot_mu * mat_mu
 
-            # Native complex64 unitary SVD on the local tangent chart
-            _, _, Vh = torch.linalg.svd(z_perp, full_matrices=False)
-            rank = min(effective_rank, Vh.shape[0], max(1, complex_dim - 1))
-            basis = Vh[:rank]  # [rank, complex_dim] complex64 unitary rows
+            _, _, Vh = torch.linalg.svd(tan_mat, full_matrices=False)
+            rank = min(effective_rank, Vh.shape[0], max(1, D_eff - 2))
+            basis = Vh[:rank]  # [rank, D_eff] orthonormal tangent basis orthogonal to mu
 
-            res = self._chart_residual(cluster_z, mu, basis)
-            raw_q = torch.quantile(res, self.quantile).item()
+            res_perp, res_long = self._chart_components(cluster_z, mu, basis)
+            raw_q_perp = torch.quantile(res_perp, self.quantile).item()
+            raw_q_long = torch.quantile(res_long, self.quantile).item()
 
-            # Real degrees of freedom in complex dimension m is 2m - 1 (with 2*rank absorbed)
-            eff_real_dim = float(2 * complex_dim - 1)
-            eff_subspace_dof = float(2 * rank)
-            dof_dim = math.sqrt(max(1.0, eff_real_dim / max(1.0, eff_real_dim - eff_subspace_dof)))
+            # Finite-sample & subspace degrees-of-freedom correction for unseen queries
+            dof_dim = math.sqrt(max(1.0, (D_eff - 1.0) / max(1.0, D_eff - 1.0 - rank)))
             dof_sample = math.sqrt((n_k + 1.0) / max(1.0, n_k - rank - 1.0))
-            thresh = raw_q * dof_dim * dof_sample
+            thresh_perp = max(raw_q_perp * dof_dim * dof_sample, 1e-6)
+            thresh_long = max(raw_q_long * math.sqrt((n_k + 1.0) / max(1.0, n_k - 2.0)), 1e-6)
 
             self.charts.append({
                 "mean_real": mu.real.contiguous(),
                 "mean_imag": mu.imag.contiguous(),
-                "basis_real": basis.real.contiguous(),
-                "basis_imag": basis.imag.contiguous(),
-                "threshold": float(thresh),
+                "basis": basis.contiguous(),
+                "threshold": float(thresh_perp),
+                "threshold_long": float(thresh_long),
             })
-            residuals.append(res * (dof_dim * dof_sample))
+            residuals.append(res_perp * (dof_dim * dof_sample))
 
         all_res = torch.cat(residuals)
         self.global_threshold = torch.quantile(all_res, self.quantile).item()
         return self
 
-    def _chart_residual(self, z: torch.Tensor, mu: torch.Tensor, basis: torch.Tensor) -> torch.Tensor:
-        # 1. Hermitian inner product <mu | z>
-        inner = torch.sum(mu.conj() * z, dim=-1, keepdim=True)
+    def _chart_components(self, z: torch.Tensor, mu: torch.Tensor, basis: torch.Tensor):
+        mat_z = torch.cat([z.real, z.imag], dim=-1)
+        mat_mu = torch.cat([mu.real, mu.imag], dim=-1)
 
-        # 2. Orthogonal complex tangent vector z_perp = z - <mu | z> mu
-        z_perp = z - inner * mu
+        # Remove radial sphere curvature along mu so tangent sheet is curvature-free
+        dot_mu = torch.sum(mat_z * mat_mu, dim=-1, keepdim=True)
+        tan_mat = mat_z - dot_mu * mat_mu
 
-        # 3. Project onto unitary complex basis via Hermitian conjugate transpose (.mH)
-        projected = torch.matmul(z_perp, basis.mH)
+        # Gate 1: Transverse Subspace Incidence Residual (off the tangent sheet)
+        projected = torch.matmul(tan_mat, basis.mT)
         reconstructed = torch.matmul(projected, basis)
-        transverse_sq = torch.sum(torch.abs(z_perp - reconstructed) ** 2, dim=-1)
+        res_perp = torch.linalg.norm(tan_mat - reconstructed, dim=-1)
 
-        # 4. Exact Pythagorean longitudinal ray drift |1 - <mu | z>|^2
-        longitudinal_sq = (torch.abs(1.0 - inner.squeeze(-1)) ** 2)
-        return torch.sqrt(transverse_sq + longitudinal_sq + 1e-12)
+        # Gate 2: Longitudinal Geodesic Chord Drift from centroid
+        res_long = torch.linalg.norm(mat_z - mat_mu, dim=-1)
+        return res_perp, res_long
 
     def score_samples(self, x: torch.Tensor):
         x = self._validate_input(x)
@@ -122,14 +124,17 @@ class AIVectorShield:
         all_ratios = []
         for chart in self.charts:
             mu = torch.complex(chart["mean_real"].to(x.device), chart["mean_imag"].to(x.device))
-            if "basis_real" in chart:
-                basis = torch.complex(chart["basis_real"].to(x.device), chart["basis_imag"].to(x.device))
-            else:
-                basis = chart["basis"].to(x.device)
-            thresh = chart["threshold"]
-            r = self._chart_residual(z, mu, basis)
-            all_residuals.append(r)
-            all_ratios.append(r / (thresh + 1e-8))
+            basis = chart["basis"].to(x.device)
+            thresh_perp = chart["threshold"]
+            thresh_long = chart.get("threshold_long", thresh_perp * 4.0)
+
+            res_perp, res_long = self._chart_components(z, mu, basis)
+            ratio_perp = res_perp / (thresh_perp + 1e-8)
+            ratio_long = res_long / (thresh_long + 1e-8)
+
+            combined_ratio = torch.maximum(ratio_perp, ratio_long)
+            all_residuals.append(res_perp)
+            all_ratios.append(combined_ratio)
 
         ratios_stack = torch.stack(all_ratios, dim=-1)        # [N, K]
         residuals_stack = torch.stack(all_residuals, dim=-1)  # [N, K]
