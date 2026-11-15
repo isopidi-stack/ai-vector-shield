@@ -115,7 +115,7 @@ class FullTwistorIncidenceBundleShield:
         mad_s = torch.median(torch.abs(local_spike - med_s)) + 1e-12
         z_spike = (local_spike - med_s) / (1.4826 * mad_s)
 
-        quarantine_mask = raw_flag & (z_spike > (0.85 * thresh))
+        quarantine_mask = raw_flag & (z_spike > thresh) & (local_spike > 2.5 * med_s)
 
         H_healed = H.clone()
         clean_indices = torch.where(~quarantine_mask)[0]
