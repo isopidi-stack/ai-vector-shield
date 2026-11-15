@@ -1,6 +1,7 @@
 import unittest
 import torch
 from casimir_harmonics import PenroseTwistorHarmonicEngine
+from topological_poison_shield import FullTwistorIncidenceBundleShield as DefaultProductionShield
 
 class SingleFiberTwistorShield:
     """
