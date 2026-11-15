@@ -37,11 +37,19 @@ class CP3TopologicalPoisonShield(nn.Module):
         curv[1:-1] = torch.sqrt(torch.sum(torch.abs(d2X)**2, dim=(-2, -1)).real + 1e-12)
         curv[0], curv[-1] = curv[1], curv[-2]
 
-        # 3. Penrose Ground-State Harmonic Energy Deviation
-        trace_X = (X_herm[:, 0, 0] + X_herm[:, 1, 1]).real
-        det_X = (X_herm[:, 0, 0] * X_herm[:, 1, 1] - X_herm[:, 0, 1] * X_herm[:, 1, 0]).real
-        energy_storage = torch.clamp(torch.abs(trace_X**2 - 4.0 * det_X), min=1e-12)
-        freq = self.shell.omega_0 * torch.sqrt(energy_storage / (torch.median(energy_storage) + 1e-6))
+        # 3. Genuine L^2(CP^1) Conformal Casimir / Laplace-Beltrami Harmonic Deviation
+        p0, p1 = pi[:, 0], pi[:, 1]
+        n_unit = torch.stack([
+            2.0 * (p0 * torch.conj(p1)).real,
+            2.0 * (torch.conj(p0) * p1).imag,
+            torch.abs(p0)**2 - torch.abs(p1)**2
+        ], dim=-1)
+        dn = torch.zeros_like(n_unit)
+        dn[1:-1] = n_unit[2:] - 2.0 * n_unit[1:-1] + n_unit[:-2]
+        dn[0], dn[-1] = dn[1], dn[-2]
+        dn_tangent = dn - torch.sum(dn * n_unit, dim=-1, keepdim=True) * n_unit
+        casimir_eigen_density = torch.sum(dn_tangent**2, dim=-1)
+        freq = self.shell.omega_0 * torch.sqrt(4.0 * (casimir_eigen_density + 0.25))
         harmonic_dev = torch.abs(freq - self.shell.omega_0)
 
         # Combined invariant topological anomaly score per token

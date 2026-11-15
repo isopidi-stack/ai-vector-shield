@@ -101,11 +101,25 @@ class CP3MetacognitionShell(nn.Module):
         dX2 = X_herm[2:] - 2.0 * X_herm[1:-1] + X_herm[:-2]
         curvature_strain = torch.mean(torch.abs(dX2)**2) + 0.5 * torch.mean(torch.abs(dX1)**2)
 
-        # 2. Penrose ground-state harmonic energy storage minimization
-        trace_X = (X_herm[:, 0, 0] + X_herm[:, 1, 1]).real
+        # 2. Genuine L^2(CP^1) Conformal Casimir / Laplace-Beltrami Energy Functional:
+        # Evaluates local spinor Dirichlet energy ||grad_{CP^1} pi||^2 + 1/4 around the token congruence
         det_X = (X_herm[:, 0, 0] * X_herm[:, 1, 1] - X_herm[:, 0, 1] * X_herm[:, 1, 0]).real
-        energy_storage = torch.clamp(torch.abs(trace_X**2 - 4.0 * det_X), min=1e-12)
-        freq = self.omega_0 * torch.sqrt(energy_storage / (torch.mean(energy_storage) + 1e-6))
+        p0, p1 = pi[:, 0], pi[:, 1]
+        nx = 2.0 * (p0 * torch.conj(p1)).real
+        ny = 2.0 * (torch.conj(p0) * p1).imag
+        nz = (torch.abs(p0)**2 - torch.abs(p1)**2)
+        n_unit = torch.stack([nx, ny, nz], dim=-1)
+
+        # Discrete Laplace-Beltrami Casimir operator -Delta_{CP^1} along the token trajectory on S^2
+        dn = torch.zeros_like(n_unit)
+        dn[1:-1] = n_unit[2:] - 2.0 * n_unit[1:-1] + n_unit[:-2]
+        dn[0], dn[-1] = dn[1], dn[-2]
+        # Project onto tangent plane of CP^1 (orthogonal to n_unit) to isolate pure spherical Casimir energy
+        dn_tangent = dn - torch.sum(dn * n_unit, dim=-1, keepdim=True) * n_unit
+        casimir_eigen_density = torch.sum(dn_tangent**2, dim=-1)
+
+        # Conformal eigen-frequency omega = sqrt(lambda_casimir + 1/4), scaled to omega_0 ground state (l=0 => lambda=0)
+        freq = self.omega_0 * torch.sqrt(4.0 * (casimir_eigen_density + 0.25))
         harmonic_strain = torch.mean((freq - self.omega_0)**2)
 
         # 3. Helicity invariant audit
