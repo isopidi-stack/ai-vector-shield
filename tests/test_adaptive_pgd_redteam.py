@@ -148,7 +148,7 @@ class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
         X_train = rng.normal(size=(400, 64))
         X_test = rng.normal(size=(200, 64))
 
-        vs = VectorShield(latent_rank=8, n_clusters=4, quantile=0.99, random_state=42)
+        vs = VectorShield(latent_rank=8, n_clusters=4, quantile=0.99)
         vs.fit(X_train)
 
         res_orig = vs.verify(X_test)

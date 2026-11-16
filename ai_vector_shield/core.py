@@ -1,160 +1,168 @@
-import numpy as np
+import math
 import torch
+import numpy as np
 from sklearn.cluster import KMeans
 
+
 class AIVectorShield:
+    r"""
+    Core engine for piecewise-local complex projective manifolds (\mathbb{CP}^d)
+    providing vector-space security and out-of-distribution detection for RAG.
+
+    Enforces a two-gate geometric invariant per local chart:
+      1. Transverse Subspace Incidence (off-manifold tangent residual orthogonal to mu)
+      2. Longitudinal Geodesic Drift (chord radius from chart ray mu)
     """
-    Projective C P^{d-1} / S^{d-1} Subspace Anomaly Shield with exact U(1) phase
-    and sign-flip gauge canonicalization and per-cluster tangent SVD projection.
-    """
-    def __init__(self, dim: int, latent_rank: int = 8, n_clusters: int = 4, quantile: float = 0.99, random_state: int = 42):
+    def __init__(self, dim: int, latent_rank: int = 8, n_clusters: int = 3, quantile: float = 0.99):
         self.dim = dim
         self.latent_rank = latent_rank
         self.n_clusters = n_clusters
         self.quantile = quantile
-        self.random_state = random_state
-        self.is_fitted = False
-        self.centroids = None
-        self. projectors = None
-        self.radii = None
-        self.res_thresholds = None
+        self.charts = []
+        self.global_threshold = 0.0
+
+    def _validate_input(self, x) -> torch.Tensor:
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32)
+        if x.ndim == 1:
+            x = x.unsqueeze(0)
+        if x.shape[-1] != self.dim:
+            raise ValueError(f"Embedding dimension mismatch: expected {self.dim}, got {x.shape[-1]}.")
+        return x
+
+    def _to_complex_projective(self, x: torch.Tensor) -> torch.Tensor:
+        if torch.is_complex(x):
+            return (x / (torch.linalg.norm(x, dim=-1, keepdim=True) + 1e-8)).to(torch.complex64)
+        x_f = x.to(torch.float32)
+        x_norm = x_f / (torch.linalg.norm(x_f, dim=-1, keepdim=True) + 1e-8)
+        if x_norm.shape[-1] % 2 == 0:
+            return torch.complex(x_norm[..., 0::2], x_norm[..., 1::2])
+        return torch.complex(x_norm, torch.zeros_like(x_norm))
+
 
     @staticmethod
-    def _canonicalize_u1_gauge(X: np.ndarray) -> np.ndarray:
-        norms = np.linalg.norm(X, axis=1, keepdims=True)
-        norms = np.where(norms < 1e-12, 1.0, norms)
-        U = X / norms
-        d = U.shape[1]
-        m = d // 2
-        if 2 * m == d:
-            z_re = U[:, :m]
-            z_im = U[:, m:]
-            mag_sq = z_re ** 2 + z_im ** 2
-            anchor = np.argmax(mag_sq, axis=1)
-            rows = np.arange(U.shape[0])
-            a_re = z_re[rows, anchor]
-            a_im = z_im[rows, anchor]
-            a_abs = np.sqrt(np.maximum(a_re ** 2 + a_im ** 2, 1e-24))
-            cos_p = a_re / a_abs
-            sin_p = a_im / a_abs
-            rot_re = z_re * cos_p[:, None] + z_im * sin_p[:, None]
-            rot_im = z_im * cos_p[:, None] - z_re * sin_p[:, None]
-            return np.concatenate([rot_re, rot_im], axis=1)
-        else:
-            anchor = np.argmax(np.abs(U), axis=1)
-            signs = np.sign(U[np.arange(U.shape[0]), anchor])
-            signs = np.where(signs == 0, 1.0, signs)
-            return U * signs[:, None]
+    def _u1_canonical(X_t: torch.Tensor) -> torch.Tensor:
+        norms = torch.linalg.norm(X_t, dim=1, keepdim=True).clamp(min=1e-12)
+        U = X_t / norms
+        D = U.shape[1]
+        m = D // 2
+        if 2 * m == D:
+            zr, zi = U[:, :m], U[:, m:]
+            idx = torch.argmax(zr * zr + zi * zi, dim=1)
+            rows = torch.arange(U.shape[0], device=U.device)
+            ar, ai = zr[rows, idx], zi[rows, idx]
+            aa = torch.sqrt((ar * ar + ai * ai).clamp(min=1e-24))
+            cp, sp = (ar / aa).unsqueeze(1), (ai / aa).unsqueeze(1)
+            return torch.cat([zr * cp + zi * sp, zi * cp - zr * sp], dim=1)
+        idx = torch.argmax(torch.abs(U), dim=1)
+        s = torch.sign(U[torch.arange(U.shape[0], device=U.device), idx]).unsqueeze(1)
+        s = torch.where(s == 0, torch.ones_like(s), s)
+        return U * s
 
-    def fit(self, X: np.ndarray):
-        if X.ndim == 1:
-            X = X.reshape(1, -1)
-        if X.shape[1] != self.dim:
-            raise ValueError(f"Dimension mismatch: expected {self.dim}, got {X.shape[1]}")
+    def fit(self, embeddings: torch.Tensor):
+        embeddings = self._validate_input(embeddings)
+        N = embeddings.shape[0]
+        effective_rank = min(self.latent_rank, max(2, N // (3 * self.n_clusters)))
 
-        Z = self._canonicalize_u1_gauge(X.astype(np.float64))
-        N, D = Z.shape
-        k_eff = min(self.n_clusters, max(1, N // 4))
+        z = self._to_complex_projective(embeddings)
+        z_real = torch.cat([z.real, z.imag], dim=-1)
+        D_eff = z_real.shape[-1]
 
-        km = KMeans(n_clusters=k_eff, random_state=self.random_state, n_init=10)
-        labels = km.fit_predict(Z)
-        self.centroids = km.cluster_centers_.astype(np.float64)
+        kmeans = KMeans(n_clusters=self.n_clusters, n_init=10, random_state=42).fit(z_real.cpu().numpy())
+        labels = kmeans.labels_
 
-        self.projectors = np.zeros((k_eff, D, self.latent_rank), dtype=np.float64)
-        self.radii = np.zeros(k_eff, dtype=np.float64)
-        self.res_thresholds = np.zeros(k_eff, dtype=np.float64)
+        self.charts = []
+        residuals = []
 
-        n_per_cluster = max(1.0, float(N) / k_eff)
-        margin = 1.0 + 2.2 / np.sqrt(n_per_cluster) + 1.2 * np.sqrt(D) / max(10.0, n_per_cluster)
+        for k in range(self.n_clusters):
+            cluster_mask = (labels == k)
+            if cluster_mask.sum() < effective_rank + 2:
+                cluster_mask = np.ones_like(labels, dtype=bool)
 
-        for c in range(k_eff):
-            mask = labels == c
-            Z_c = Z[mask]
-            center = self.centroids[c]
-            diff = Z_c - center[None, :]
-            dists = np.linalg.norm(diff, axis=1)
-            self.radii[c] = float(np.quantile(dists, self.quantile) * margin + 1e-6)
+            cluster_z = z[cluster_mask]
+            n_k = int(cluster_z.shape[0])
 
-            if Z_c.shape[0] > 1:
-                _, _, Vt = np.linalg.svd(diff, full_matrices=False)
-                r_actual = min(self.latent_rank, Vt.shape[0])
-                basis = Vt[:r_actual].T
-                self.projectors[c, :, :r_actual] = basis
-                proj = (diff @ basis) @ basis.T
-                res = np.linalg.norm(diff - proj, axis=1)
-                self.res_thresholds[c] = float(np.quantile(res, self.quantile) * margin + 1e-6)
-            else:
-                self.res_thresholds[c] = self.radii[c]
+            # Projective ray centroid normalized on the unit sphere
+            raw_mean = cluster_z.mean(dim=0, keepdim=True)
+            mu = raw_mean / (torch.linalg.norm(raw_mean, dim=-1, keepdim=True) + 1e-8)
 
-        self.is_fitted = True
+            # True tangent projection orthogonal to mu (removes sphere radial curvature 1 - cos(theta))
+            mat_z = torch.cat([cluster_z.real, cluster_z.imag], dim=-1)
+            mat_mu = torch.cat([mu.real, mu.imag], dim=-1)
+            dot_mu = torch.sum(mat_z * mat_mu, dim=-1, keepdim=True)
+            tan_mat = mat_z - dot_mu * mat_mu
+
+            _, _, Vh = torch.linalg.svd(tan_mat, full_matrices=False)
+            rank = min(effective_rank, Vh.shape[0], max(1, D_eff - 2))
+            basis = Vh[:rank]  # [rank, D_eff] orthonormal tangent basis orthogonal to mu
+
+            res_perp, res_long = self._chart_components(cluster_z, mu, basis)
+            raw_q_perp = torch.quantile(res_perp, self.quantile).item()
+            raw_q_long = torch.quantile(res_long, self.quantile).item()
+
+            # Finite-sample & subspace degrees-of-freedom correction for unseen queries
+            dof_dim = math.sqrt(max(1.0, (D_eff - 1.0) / max(1.0, D_eff - 1.0 - rank)))
+            dof_sample = math.sqrt((n_k + 1.0) / max(1.0, n_k - rank - 1.0))
+            thresh_perp = max(raw_q_perp * dof_dim * dof_sample, 1e-6)
+            thresh_long = max(raw_q_long * math.sqrt((n_k + 1.0) / max(1.0, n_k - 2.0)), 1e-6)
+
+            self.charts.append({
+                "mean_real": mu.real.contiguous(),
+                "mean_imag": mu.imag.contiguous(),
+                "basis": basis.contiguous(),
+                "threshold": float(thresh_perp),
+                "threshold_long": float(thresh_long),
+            })
+            residuals.append(res_perp * (dof_dim * dof_sample))
+
+        all_res = torch.cat(residuals)
+        self.global_threshold = torch.quantile(all_res, self.quantile).item()
         return self
 
-    def verify(self, X: np.ndarray, mode: str = "enforce") -> dict:
-        if not self.is_fitted:
-            raise RuntimeError("Shield is not fitted.")
-        if X.ndim == 1:
-            X = X.reshape(1, -1)
-        if X.shape[1] != self.dim:
-            raise ValueError(f"Dimension mismatch: expected {self.dim}, got {X.shape[1]}")
+    def _chart_components(self, z: torch.Tensor, mu: torch.Tensor, basis: torch.Tensor):
+        mat_z = torch.cat([z.real, z.imag], dim=-1)
+        mat_mu = torch.cat([mu.real, mu.imag], dim=-1)
 
-        Z = self._canonicalize_u1_gauge(X.astype(np.float64))
-        N = Z.shape[0]
+        # Remove radial sphere curvature along mu so tangent sheet is curvature-free
+        dot_mu = torch.sum(mat_z * mat_mu, dim=-1, keepdim=True)
+        tan_mat = mat_z - dot_mu * mat_mu
 
-        dists_all = np.linalg.norm(Z[:, None, :] - self.centroids[None, :, :], axis=2)
-        labels = np.argmin(dists_all, axis=1)
+        # Gate 1: Transverse Subspace Incidence Residual (off the tangent sheet)
+        projected = torch.matmul(tan_mat, basis.mT)
+        reconstructed = torch.matmul(projected, basis)
+        res_perp = torch.linalg.norm(tan_mat - reconstructed, dim=-1)
 
-        radial_ratios = np.zeros(N, dtype=np.float64)
-        residual_ratios = np.zeros(N, dtype=np.float64)
+        # Gate 2: Longitudinal Geodesic Chord Drift from centroid
+        res_long = torch.linalg.norm(mat_z - mat_mu, dim=-1)
+        return res_perp, res_long
 
-        for i in range(N):
-            c = int(labels[i])
-            diff = Z[i] - self.centroids[c]
-            dist = float(np.linalg.norm(diff))
-            radial_ratios[i] = dist / max(self.radii[c], 1e-12)
+    def score_samples(self, x: torch.Tensor):
+        x = self._validate_input(x)
+        z = self._to_complex_projective(x)
 
-            basis = self.projectors[c]
-            proj = (diff @ basis) @ basis.T
-            res = float(np.linalg.norm(diff - proj))
-            residual_ratios[i] = res / max(self.res_thresholds[c], 1e-12)
+        all_residuals = []
+        all_ratios = []
+        for chart in self.charts:
+            mu = torch.complex(chart["mean_real"].to(x.device), chart["mean_imag"].to(x.device))
+            basis = chart["basis"].to(x.device)
+            thresh_perp = chart["threshold"]
+            thresh_long = chart.get("threshold_long", thresh_perp * 4.0)
 
-        scores = np.maximum(radial_ratios, residual_ratios)
-        raw_accept = scores <= 1.0
-        accepted = np.ones(N, dtype=bool) if mode == "shadow" else raw_accept
+            res_perp, res_long = self._chart_components(z, mu, basis)
+            ratio_perp = res_perp / (thresh_perp + 1e-8)
+            ratio_long = res_long / (thresh_long + 1e-8)
 
-        return {
-            "accepted": accepted,
-            "would_quarantine": ~raw_accept,
-            "anomaly_scores": scores,
-            "cluster_ids": labels,
-            "telemetry": {
-                "radial_ratios": radial_ratios,
-                "residual_ratios": residual_ratios,
-                "max_score": float(np.max(scores)),
-            },
-        }
+            combined_ratio = torch.maximum(ratio_perp, ratio_long)
+            all_residuals.append(res_perp)
+            all_ratios.append(combined_ratio)
 
-    def state_dict(self) -> dict:
-        if not self.is_fitted:
-            raise RuntimeError("Cannot export state_dict of unfitted shield.")
-        return {
-            "dim": torch.tensor(self.dim, dtype=torch.int64),
-            "latent_rank": torch.tensor(self.latent_rank, dtype=torch.int64),
-            "n_clusters": torch.tensor(self.n_clusters, dtype=torch.int64),
-            "quantile": torch.tensor(self.quantile, dtype=torch.float64),
-            "centroids": torch.from_numpy(self.centroids),
-            "projectors": torch.from_numpy(self.projectors),
-            "radii": torch.from_numpy(self.radii),
-            "res_thresholds": torch.from_numpy(self.res_thresholds),
-        }
+        ratios_stack = torch.stack(all_ratios, dim=-1)        # [N, K]
+        residuals_stack = torch.stack(all_residuals, dim=-1)  # [N, K]
+        min_ratios, best_charts = torch.min(ratios_stack, dim=-1)
+        best_residuals = residuals_stack.gather(1, best_charts.unsqueeze(-1)).squeeze(-1)
+        allowed = min_ratios <= 1.0
+        return allowed, best_residuals, min_ratios, best_charts
 
-    def load_state_dict(self, state: dict):
-        self.dim = int(state["dim"].item())
-        self.latent_rank = int(state["latent_rank"].item())
-        self.n_clusters = int(state["n_clusters"].item())
-        self.quantile = float(state["quantile"].item())
-        self.centroids = state["centroids"].detach().cpu().numpy().astype(np.float64)
-        self.projectors = state["projectors"].detach().cpu().numpy().astype(np.float64)
-        self.radii = state["radii"].detach().cpu().numpy().astype(np.float64)
-        self.res_thresholds = state["res_thresholds"].detach().cpu().numpy().astype(np.float64)
-        self.is_fitted = True
-        return self
+    def verify(self, x: torch.Tensor) -> torch.Tensor:
+        allowed, _, _, _ = self.score_samples(x)
+        return allowed

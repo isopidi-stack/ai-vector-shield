@@ -39,18 +39,45 @@ class FullTwistorIncidenceBundleShield:
 
     @staticmethod
     def compute_clean_reference_manifold(H: torch.Tensor, window: int = 19) -> torch.Tensor:
-        """
-        Edge-preserving reference trajectory estimator:
-        Uses a wide sliding median (resistant to contiguous blocks up to (window-1)//2)
-        WITHOUT binomial blurring across step boundaries, so adjacent clean tokens never
-        absorb energy from a ||delta|| = 50 block!
-        """
         T, D = H.shape
         half_w = window // 2
         padded = torch.cat([H[:1].repeat(half_w, 1), H, H[-1:].repeat(half_w, 1)], dim=0)
-        windows = padded.unfold(0, window, 1)  # (T, D, window)
-        med_traj = torch.median(windows, dim=-1).values
-        return med_traj
+        med_traj = torch.median(padded.unfold(0, window, 1), dim=-1).values
+        raw_diff = torch.linalg.norm(H - med_traj, dim=-1)
+        med_raw = torch.median(raw_diff)
+        rough_clean = raw_diff <= torch.clamp(3.8 * med_raw, min=1.35)
+        if int(torch.sum(rough_clean).item()) < 16:
+            return med_traj
+        H_ref = H.clone()
+        idx = 0
+        while idx < T:
+            if bool(rough_clean[idx].item()):
+                idx += 1
+                continue
+            s = idx
+            while idx < T and not bool(rough_clean[idx].item()):
+                idx += 1
+            e = idx - 1
+            l_a, r_a = s - 1, e + 1
+            if l_a >= 0 and r_a < T:
+                dt = float(r_a - l_a)
+                p0, p1 = H[l_a], H[r_a]
+                m0 = (H[l_a] - H[l_a - 1]) if (l_a >= 1 and bool(rough_clean[l_a - 1].item())) else ((p1 - p0) / dt)
+                m1 = (H[r_a + 1] - H[r_a]) if (r_a + 1 < T and bool(rough_clean[r_a + 1].item())) else ((p1 - p0) / dt)
+                for t in range(s, e + 1):
+                    u = float(t - l_a) / dt
+                    h00 = 2.0 * (u ** 3) - 3.0 * (u ** 2) + 1.0
+                    h10 = (u ** 3) - 2.0 * (u ** 2) + u
+                    h01 = -2.0 * (u ** 3) + 3.0 * (u ** 2)
+                    h11 = (u ** 3) - (u ** 2)
+                    H_ref[t] = h00 * p0 + h10 * dt * m0 + h01 * p1 + h11 * dt * m1
+            elif l_a >= 0:
+                H_ref[s : e + 1] = H[l_a].unsqueeze(0)
+            elif r_a < T:
+                H_ref[s : e + 1] = H[r_a].unsqueeze(0)
+            else:
+                H_ref[s : e + 1] = med_traj[s : e + 1]
+        return H_ref
 
     def analyze_and_purify(self, H: torch.Tensor, ref_window: int = 19) -> dict:
         H = H.to(dtype=torch.float64, device=self.device)
@@ -107,7 +134,7 @@ class FullTwistorIncidenceBundleShield:
 
         med_s = torch.median(local_spike)
         impulse_flag = (z_spike > self.z_thresh) & (local_spike > 2.2 * med_s)
-        block_or_bump_flag = (z_tube > max(self.z_thresh, 4.0)) & (tube_res > 2.2 * med_tube)
+        block_or_bump_flag = (tube_res > 1.25) & (z_tube > self.z_thresh)
 
         quarantine_mask = impulse_flag | block_or_bump_flag
         z_combined = torch.maximum(z_spike, z_tube)
