@@ -1,9 +1,34 @@
 ﻿__pycache__/
 *.py[cod]
-venv/
+*$py.class
+.pytest_cache/
 .venv/
-dist/
+venv/
 build/
+dist/
 *.egg-info/
-Figure_*.png
-Figure_*.gif
+
+# Local media, LiDAR captures, and visual showcase artifacts
+*.r3d
+*.mp4
+*.gif
+*.png
+*.webp
+ply cloud_Record3D/
+
+# Local experimental scratch scripts
+ROADMAP.md
+fusion_record3d_engine.py
+gpu_robot_vision_shoe_cp3.py
+heavy_iphone_3d_reconstructor.py
+ingest_lidar.py.py
+lidar_video_cp3_fusion.py
+parse_r3d_*.py
+penrose_rigorous_solver.py
+penrose_verified_engine.py
+photo_to_cp3_lifter.py
+render_2d_to_3d_arc_gif.py
+render_shoe_cp3_60fps.py
+test_cp3_core.py
+ultra_cp3_render.py
+video_to_cp3_fusion.py
