@@ -1,3 +1,31 @@
+
+def _u1_canon_any(x):
+    import numpy as np, torch
+    is_t = isinstance(x, torch.Tensor)
+    t = x.detach().clone().to(torch.float64) if is_t else torch.as_tensor(np.asarray(x), dtype=torch.float64)
+    is_1d = (t.ndim == 1)
+    if is_1d:
+        t = t.unsqueeze(0)
+    norms = torch.linalg.norm(t, dim=-1, keepdim=True).clamp(min=1e-12)
+    u = t / norms
+    d = u.shape[-1]
+    if d % 2 == 0:
+        m = d // 2
+        zr, zi = u[..., :m], u[..., m:]
+        idx = torch.argmax(zr * zr + zi * zi, dim=-1, keepdim=True)
+        ar, ai = torch.gather(zr, -1, idx), torch.gather(zi, -1, idx)
+        aa = torch.sqrt((ar * ar + ai * ai).clamp(min=1e-24))
+        cp, sp = ar / aa, ai / aa
+        res = torch.cat([zr * cp + zi * sp, zi * cp - zr * sp], dim=-1) * norms
+    else:
+        idx = torch.argmax(torch.abs(u), dim=-1, keepdim=True)
+        sg = torch.sign(torch.gather(u, -1, idx))
+        sg = torch.where(sg == 0, torch.ones_like(sg), sg)
+        res = (u * sg) * norms
+    if is_1d:
+        res = res.squeeze(0)
+    return res.to(x.dtype) if is_t else res.numpy()
+
 ﻿import time
 import torch
 import numpy as np
@@ -25,6 +53,7 @@ class VectorShield:
         self._is_fitted = False
 
     def fit(self, embeddings):
+        embeddings = _u1_canon_any(embeddings)
         if isinstance(embeddings, np.ndarray):
             embeddings = torch.tensor(embeddings, dtype=torch.float32)
 
@@ -45,6 +74,7 @@ class VectorShield:
         return self
 
     def verify(self, query_embeddings):
+        query_embeddings = _u1_canon_any(query_embeddings)
         if not self._is_fitted:
             raise RuntimeError("Shield is not fitted. Call fit() or load() first.")
         predictions = self._shield.verify(query_embeddings)
@@ -53,6 +83,7 @@ class VectorShield:
         return predictions.cpu().numpy().astype(bool)
 
     def inspect(self, query_embeddings):
+        query_embeddings = _u1_canon_any(query_embeddings)
         """Returns structured per-sample security diagnostics with latency telemetry."""
         if not self._is_fitted:
             raise RuntimeError("Shield is not fitted. Call fit() or load() first.")

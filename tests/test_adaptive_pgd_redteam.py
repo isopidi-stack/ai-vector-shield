@@ -151,7 +151,7 @@ class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
         X_rot[:, :m] = X_test[:, :m] * math.cos(theta) - X_test[:, m:] * math.sin(theta)
         X_rot[:, m:] = X_test[:, :m] * math.sin(theta) + X_test[:, m:] * math.cos(theta)
         res_rot = vs.inspect(X_rot)
-        k = [x for x in res_orig[0].keys() if x != "accepted" and isinstance(res_orig[0][x], (int, float, np.floating))][0]
+        k = [x for x in res_orig[0].keys() if isinstance(res_orig[0][x], (float, np.floating))][0]
         so = np.asarray([float(r[k]) for r in res_orig])
         sn = np.asarray([float(r[k]) for r in res_neg])
         sr = np.asarray([float(r[k]) for r in res_rot])

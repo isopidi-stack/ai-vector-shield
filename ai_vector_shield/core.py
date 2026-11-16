@@ -39,27 +39,6 @@ class AIVectorShield:
             return torch.complex(x_norm[..., 0::2], x_norm[..., 1::2])
         return torch.complex(x_norm, torch.zeros_like(x_norm))
 
-    @staticmethod
-    def _u1_canonical(X_in):
-        is_np = not isinstance(X_in, torch.Tensor)
-        X_t = torch.as_tensor(X_in, dtype=torch.float64) if is_np else X_in.to(torch.float64)
-        U = X_t / torch.linalg.norm(X_t, dim=1, keepdim=True).clamp(min=1e-12)
-        D = U.shape[1]
-        if D % 2 == 0:
-            m = D // 2
-            zr, zi = U[:, :m], U[:, m:]
-            idx = torch.argmax(zr * zr + zi * zi, dim=1)
-            r = torch.arange(U.shape[0], device=U.device)
-            ar, ai = zr[r, idx], zi[r, idx]
-            aa = torch.sqrt((ar * ar + ai * ai).clamp(min=1e-24))
-            cp, sp = (ar / aa).unsqueeze(1), (ai / aa).unsqueeze(1)
-            res = torch.cat([zr * cp + zi * sp, zi * cp - zr * sp], dim=1)
-        else:
-            idx = torch.argmax(torch.abs(U), dim=1)
-            sg = torch.sign(U[torch.arange(U.shape[0], device=U.device), idx]).unsqueeze(1)
-            res = U * torch.where(sg == 0, torch.ones_like(sg), sg)
-        return res.numpy() if is_np else res
-
     def fit(self, embeddings: torch.Tensor):
         embeddings = self._validate_input(embeddings)
         N = embeddings.shape[0]
