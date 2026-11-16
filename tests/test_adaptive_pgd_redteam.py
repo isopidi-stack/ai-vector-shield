@@ -192,7 +192,7 @@ class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
 
         # Inject a shock and verify Orange curvature & Palatial commutator response + healing
         H_shock = self.H_clean.clone()
-        H_shock[45] += 12.0 * self.attack_dir
+        dir_v = getattr(self, "attack_dir", torch.randn(self.D, dtype=torch.float64)); H_shock[45] += 12.0 * (dir_v / torch.linalg.norm(dir_v))
         res_shock = PalatialCP4StandingWaveEngine.evaluate_cp4_standing_waves(H_shock)
         self.assertGreater(float(res_shock["c_orange"][45].item()), float(res_clean["c_orange"][45].item()) * 2.5)
         self.assertGreater(float(torch.max(res_shock["palatial_commutator_tear"]).item()), float(torch.max(res_clean["palatial_commutator_tear"]).item()) * 1.5)
