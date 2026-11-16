@@ -5,7 +5,7 @@ import torch
 
 from ai_vector_shield import VectorShield
 from casimir_harmonics import SpinorHarmonicCasimirEngine
-from metacognition_shell import MetacognitiveTwistorShell
+from metacognition_shell import MetacognitiveTwistorShell, PalatialCP4StandingWaveEngine
 from topological_poison_shield import FullTwistorIncidenceBundleShield
 
 
@@ -161,6 +161,53 @@ class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
         self.assertLess(dn, 1e-13)
         self.assertLess(dr, 1e-13)
         self.assertGreaterEqual(acc, 95.0)
+
+    def test_6_palatial_cp4_standing_waves_and_gpo_triad(self):
+        """
+        Verifies Penrose Palatial Twistor Standing-Wave Engine on CP^4:
+          1. Exact Green-Purple-Orange (GPO) triadic partition of unity: c_G(t) + c_P(t) + c_O(t) == 1.0 (to 1e-15).
+          2. Exact local U(1) gauge invariance of GPO triad and non-commutative Palatial commutator [rho_t, rho_{t-1}] (to 1e-15).
+          3. Dynamic manifold sensitivity: adversarial injection spikes Orange curvature mode and Palatial commutator tear,
+             while closed-loop stabilization restores Green standing-wave coherence.
+        """
+        res_clean = PalatialCP4StandingWaveEngine.evaluate_cp4_standing_waves(self.H_clean)
+        triad_err = float(torch.max(torch.abs(res_clean["triad_sum"] - 1.0)).item())
+        self.assertLess(triad_err, 1e-15)
+
+        # Verify local U(1) gauge invariance Z5_hat[t, k] -> exp(i * theta_{t,k}) * Z5_hat[t, k]
+        Z5 = res_clean["Z5_hat"]
+        gen = torch.Generator(device="cpu")
+        gen.manual_seed(777)
+        rand_phases = torch.exp(1j * (2.0 * math.pi * torch.rand(Z5.shape[:-1], dtype=torch.float64, generator=gen))).unsqueeze(-1)
+        res_gauged = PalatialCP4StandingWaveEngine.evaluate_from_cp4_states(Z5 * rand_phases)
+
+        gpo_gauge_diff = float(
+            torch.max(torch.abs(res_clean["c_green"] - res_gauged["c_green"]))
+            + torch.max(torch.abs(res_clean["c_purple"] - res_gauged["c_purple"]))
+            + torch.max(torch.abs(res_clean["c_orange"] - res_gauged["c_orange"]))
+        )
+        comm_gauge_diff = float(torch.max(torch.abs(res_clean["palatial_commutator_tear"] - res_gauged["palatial_commutator_tear"])).item())
+        self.assertLess(gpo_gauge_diff, 1e-15)
+        self.assertLess(comm_gauge_diff, 1e-15)
+
+        # Inject a shock and verify Orange curvature & Palatial commutator response + healing
+        H_shock = self.H_clean.clone()
+        H_shock[45] += 12.0 * self.attack_dir
+        res_shock = PalatialCP4StandingWaveEngine.evaluate_cp4_standing_waves(H_shock)
+        self.assertGreater(float(res_shock["c_orange"][45].item()), float(res_clean["c_orange"][45].item()) * 2.5)
+        self.assertGreater(float(torch.max(res_shock["palatial_commutator_tear"]).item()), float(torch.max(res_clean["palatial_commutator_tear"]).item()) * 1.5)
+
+        shell = MetacognitiveTwistorShell(dim=self.D)
+        loop_out = shell.closed_loop_stabilize(H_shock)
+        self.assertLess(loop_out["final_commutator_tear"], loop_out["initial_commutator_tear"])
+        self.assertGreater(loop_out["final_gpo"][0], loop_out["initial_gpo"][0])
+
+        print(
+            f"  -> [AUDIT 6: Palatial CP^4 Standing Waves & GPO Triad] "
+            f"Triad Sum Err: {triad_err:.2e} | U(1) Gauge Diff: {max(gpo_gauge_diff, comm_gauge_diff):.2e} | "
+            f"Green Coherence: {loop_out['initial_gpo'][0]:.4f} -> {loop_out['final_gpo'][0]:.4f}"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
