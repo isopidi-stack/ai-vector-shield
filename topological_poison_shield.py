@@ -163,12 +163,20 @@ class FullTwistorIncidenceBundleShield:
                 # Cubic 4-point Lagrange interpolation: (-H_{t-2} + 4 H_{t-1} + 4 H_{t+1} - H_{t+2}) / 6
                 H_clean[start] = (-H[left - 1] + 4.0 * H[left] + 4.0 * H[right] - H[right + 1]) / 6.0
             elif left >= 0 and right < T:
-                # Span bridge using H_ref shape + linear boundary-residual matching at clean anchors (left, right)
-                err_left = H[left] - H_ref[left]
-                err_right = H[right] - H_ref[right]
+                # Exact Clean-Anchor Cubic Hermite Span Bridge (strictly uses verified clean tokens outside [start, end])
+                dt_span = float(right - left)
+                p0 = H[left]
+                p1 = H[right]
+                # Estimate tangent slopes m0 at left and m1 at right using verified clean exterior neighbors
+                m0 = (H[left] - H[left - 1]) if (left >= 1 and not bool(mask[left - 1].item())) else ((p1 - p0) / dt_span)
+                m1 = (H[right + 1] - H[right]) if (right + 1 < T and not bool(mask[right + 1].item())) else ((p1 - p0) / dt_span)
                 for t in range(start, end + 1):
-                    alpha = float(t - left) / float(right - left)
-                    H_clean[t] = H_ref[t] + (1.0 - alpha) * err_left + alpha * err_right
+                    s = float(t - left) / dt_span
+                    h00 = 2.0 * (s ** 3) - 3.0 * (s ** 2) + 1.0
+                    h10 = (s ** 3) - 2.0 * (s ** 2) + s
+                    h01 = -2.0 * (s ** 3) + 3.0 * (s ** 2)
+                    h11 = (s ** 3) - (s ** 2)
+                    H_clean[t] = h00 * p0 + h10 * dt_span * m0 + h01 * p1 + h11 * dt_span * m1
             elif left >= 0:
                 H_clean[start : end + 1] = H[left].unsqueeze(0)
             elif right < T:
