@@ -156,7 +156,7 @@ class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
         sn = np.asarray([float(r[k]) for r in res_neg])
         sr = np.asarray([float(r[k]) for r in res_rot])
         dn, dr = float(np.max(np.abs(so - sn))), float(np.max(np.abs(so - sr)))
-        acc = float(np.mean([bool(r["accepted"]) for r in res_orig])) * 100.0
+        acc = float(np.mean(vs.verify(X_test))) * 100.0
         print(f"  -> [AUDIT 5: CP^d Phase & Sign Invariance] Acceptance: {acc:.1f}% | Diff(-X): {dn:.2e} | Diff(Rot): {dr:.2e}")
         self.assertLess(dn, 1e-13)
         self.assertLess(dr, 1e-13)
