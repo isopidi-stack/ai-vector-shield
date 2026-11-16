@@ -102,8 +102,21 @@ def test_non_divisible_dimension_fiber_padding():
         assert torch.isclose(fibers.sum(), x.sum())
 
 
+from benchmark_adaptive_block_shield import run_adaptive_benchmark
+
+
+def test_adaptive_block_and_bump_detection():
+    """Verifies >= 90% recall, <= 5% FPR, > 65% L2 error reduction, and 0.0 clean distortion."""
+    m = run_adaptive_benchmark()
+    assert m["recall"] >= 0.90
+    assert m["fpr"] <= 0.05
+    assert m["purified_attack_l2"] < 0.35 * m["unpurified_attack_l2"]
+    assert m["clean_token_distortion"] == 0.0
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"[PASS] {name}")
+
