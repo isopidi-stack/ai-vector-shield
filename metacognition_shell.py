@@ -1,61 +1,85 @@
-import math
 import torch
-from casimir_harmonics import PenroseTwistorHarmonicEngine
+from casimir_harmonics import SpinorHarmonicCasimirEngine
 
-class CP3MetacognitionShell:
+class MetacognitiveTwistorShell:
     """
-    Phase 4 Closed-Loop Activation Trajectory Smoothing Shell:
-      - Evaluates the genuine field-level L^2(CP^1) Conformal Casimir Rayleigh quotient
-        via PenroseTwistorHarmonicEngine.compute_conformal_energy_functional over a sliding
-        window of celestial spinors (replacing the local finite-difference proxy).
-      - Evaluates the non-vanishing null-cone incidence residual ||omega_t - i X_t pi_t||_2
-        (replacing the identically zero Re(i pi^dagger X pi) expression).
+    Phase 4 Metacognitive Twistor Shell:
+      1. Computes strictly U(1)-gauge invariant Fubini-Study projective incidence residual:
+             R_inc(t) = 2 |r_t| * sqrt(1 - |<pi_t | pi_{t-1}>|^2)
+         which is invariant under arbitrary local phase transformations pi_t -> e^{i alpha_t} pi_t.
+      2. Implements an active Closed-Loop Variational Trajectory Stabilizer that damps
+         anomalous curvature/incidence excursions via screened Poisson / Tikhonov smoothing.
     """
-    def __init__(self, d_model: int = 63, window_size: int = 9, device=None):
-        if device is not None:
-            self.device = device
-        elif hasattr(torch, "xpu") and torch.xpu.is_available():
-            self.device = torch.device("xpu")
-        elif torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
+    @staticmethod
+    def vec_to_unit_spinor(v: torch.Tensor) -> torch.Tensor:
+        r = torch.linalg.norm(v, dim=-1, keepdim=True).clamp(min=1e-12)
+        u = v / r
+        x, y, z = u[..., 0], u[..., 1], u[..., 2]
+        theta = torch.acos(torch.clamp(z, -1.0 + 1e-12, 1.0 - 1e-12))
+        phi = torch.atan2(y, x)
+        c_dtype = torch.complex128 if v.dtype == torch.float64 else torch.complex64
+        s0 = torch.cos(0.5 * theta).to(c_dtype)
+        s1 = (torch.sin(0.5 * theta) * torch.exp(1j * phi)).to(c_dtype)
+        return torch.stack([s0, s1], dim=-1)
 
-        self.d_model = d_model
-        self.num_fibers = d_model // 3
-        self.window_size = window_size
-        self.harmonics = PenroseTwistorHarmonicEngine(device=self.device)
+    @staticmethod
+    def evaluate_trajectory_diagnostics(H: torch.Tensor, phase_angles: torch.Tensor = None) -> dict:
+        T, D = H.shape
+        K = D // 3
+        fibers = H[:, :3 * K].reshape(T, K, 3)
+        radii = torch.linalg.norm(fibers, dim=-1)  # (T, K)
+        dirs = fibers / radii.unsqueeze(-1).clamp(min=1e-12)
 
-        gen = torch.Generator(device="cpu").manual_seed(42)
-        Q, _ = torch.linalg.qr(torch.randn((d_model, d_model), generator=gen, dtype=torch.float64))
-        self.Q = Q.to(device=self.device)
+        pi = MetacognitiveTwistorShell.vec_to_unit_spinor(fibers)  # (T, K, 2)
+        if phase_angles is not None:
+            # Apply local U(1) gauge transformation pi -> e^{i alpha} pi to verify gauge invariance
+            phase_factor = torch.exp(1j * phase_angles.to(pi.real.dtype)).unsqueeze(-1)
+            pi = pi * phase_factor
 
-    def evaluate_trajectory_metrics(self, H: torch.Tensor) -> dict:
-        H_work = H.to(device=self.device, dtype=torch.float64)
-        T = H_work.shape[0]
-        K = self.num_fibers
-        R_fibers = (H_work @ self.Q[:, :3 * K]).view(T, K, 3)
+        # U(1)-gauge invariant Fubini-Study sine distance: sqrt(1 - |<pi_t | pi_{t-1}>|^2)
+        inner = torch.sum(torch.conj(pi[1:]) * pi[:-1], dim=-1)  # (T-1, K)
+        abs_inner_sq = torch.clamp(torch.abs(inner) ** 2, max=1.0)
+        fs_chord = torch.sqrt(torch.clamp(1.0 - abs_inner_sq, min=0.0))
 
-        # 1. Field-level L^2(CP^1) Casimir Rayleigh quotient across the K-fiber cloud at each step t
-        casimir_strain, _, _ = self.harmonics.compute_conformal_energy_functional(R_fibers, ridge_lambda=1e-4)  # (T,)
+        inc_res_step = 2.0 * radii[1:] * fs_chord
+        inc_res_total = float(torch.sum(inc_res_step).item())
 
-        # 2. Non-vanishing Twistor Incidence Residual ||omega_t - i X_t pi_{t-1}||_2 across fibers
-        pi_fibers = self.harmonics.points_to_celestial_spinors(R_fibers)  # (T, K, 2)
-        rx, ry, rz = R_fibers[..., 0], R_fibers[..., 1], R_fibers[..., 2]
-        rt = torch.norm(R_fibers, dim=-1)
-        X00 = torch.complex(rt + rz, torch.zeros_like(rt))
-        X01 = torch.complex(rx, -ry)
-        X10 = torch.complex(rx,  ry)
-        X11 = torch.complex(rt - rz, torch.zeros_like(rt))
-        X_herm = torch.stack([torch.stack([X00, X01], dim=-1), torch.stack([X10, X11], dim=-1)], dim=-2)
-
-        # Compare exact omega_t = i X_t pi_t against parallel-transported omega_trans = i X_t pi_{t-1}
-        omega_exact = 1j * torch.einsum("tkab,tkb->tka", X_herm[1:], pi_fibers[1:])
-        omega_trans = 1j * torch.einsum("tkab,tkb->tka", X_herm[1:], pi_fibers[:-1])
-        incidence_residual = torch.sqrt(torch.sum(torch.abs(omega_exact - omega_trans) ** 2, dim=(-2, -1)))
-        incidence_residual = torch.cat([torch.zeros(1, dtype=torch.float64, device=self.device), incidence_residual], dim=0)
+        casimir_t = SpinorHarmonicCasimirEngine.compute_casimir_rayleigh_quotient(dirs, radii)
+        casimir_mean = float(torch.mean(casimir_t).item())
 
         return {
-            "casimir_strain": casimir_strain,
-            "incidence_residual": incidence_residual,
+            "incidence_residual": inc_res_total,
+            "incidence_step_profile": inc_res_step,
+            "casimir_mean": casimir_mean,
+            "casimir_profile": casimir_t,
+        }
+
+    @staticmethod
+    def closed_loop_stabilize(H: torch.Tensor, lam: float = 2.0, iterations: int = 3) -> tuple[torch.Tensor, dict]:
+        """
+        Active closed-loop trajectory feedback operator:
+        Identifies high-incidence-residual steps and applies adaptive variational
+        Laplacian damping (I + w_t * lam * L) H_stab = H while preserving clean regions.
+        """
+        H_curr = H.clone()
+        diag_before = MetacognitiveTwistorShell.evaluate_trajectory_diagnostics(H_curr)
+
+        for _ in range(iterations):
+            d2 = H_curr[2:] - 2.0 * H_curr[1:-1] + H_curr[:-2]
+            curv = torch.linalg.norm(d2, dim=-1)
+            med_c = torch.median(curv)
+            mad_c = torch.median(torch.abs(curv - med_c)).clamp(min=1e-6)
+            z_c = (curv - med_c) / (1.4826 * mad_c)
+            alpha = torch.sigmoid((z_c - 3.0) * 2.0).unsqueeze(-1)  # adaptive feedback gain in [0, 1]
+
+            correction = 0.5 * (H_curr[2:] + H_curr[:-2]) - H_curr[1:-1]
+            H_next = H_curr.clone()
+            H_next[1:-1] = H_curr[1:-1] + (lam / (1.0 + 2.0 * lam)) * alpha * correction
+            H_curr = H_next
+
+        diag_after = MetacognitiveTwistorShell.evaluate_trajectory_diagnostics(H_curr)
+        return H_curr, {
+            "residual_before": diag_before["incidence_residual"],
+            "residual_after": diag_after["incidence_residual"],
+            "suppression_ratio": 1.0 - (diag_after["incidence_residual"] / max(diag_before["incidence_residual"], 1e-12)),
         }

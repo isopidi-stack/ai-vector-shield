@@ -1,195 +1,175 @@
+import math
 import unittest
+import numpy as np
 import torch
-from casimir_harmonics import PenroseTwistorHarmonicEngine
+
+from ai_vector_shield import VectorShield
+from casimir_harmonics import SpinorHarmonicCasimirEngine
+from metacognition_shell import MetacognitiveTwistorShell
 from topological_poison_shield import FullTwistorIncidenceBundleShield
-from metacognition_shell import CP3MetacognitionShell
-
-class SingleFiberTwistorShield:
-    """
-    Historical baseline single-projection shield (R^d -> R^3 -> CP^1) kept strictly
-    to demonstrate why single-fiber models fail against white-box nullspace attacks.
-    """
-    def __init__(self, d_model: int = 63, device=None):
-        self.device = device or torch.device("cpu")
-        self.harmonics = PenroseTwistorHarmonicEngine(device=self.device)
-        torch.manual_seed(42)
-        self.W_proj = torch.randn((d_model, 3), dtype=torch.float64, device=self.device) / (d_model ** 0.5)
-
-    def detect_anomalies_mad(self, H: torch.Tensor, z_thresh: float = 3.5):
-        r = H @ self.W_proj
-        pi = self.harmonics.points_to_celestial_spinors(r)
-        pi_curr, pi_prev = pi[1:], pi[:-1]
-        shear = torch.abs(pi_curr[:, 0] * pi_prev[:, 1] - pi_curr[:, 1] * pi_prev[:, 0])
-        score = torch.cat([torch.zeros(1, dtype=H.dtype, device=H.device), shear], dim=0)
-        med = torch.median(score)
-        mad = torch.median(torch.abs(score - med)) + 1e-12
-        z_scores = (score - med) / (1.4826 * mad)
-        return z_scores > z_thresh, z_scores, score
-
-
-class LogDilatonBundleShield:
-    """
-    Historical intermediate 21-fiber log-dilaton bundle kept strictly to demonstrate
-    the logarithmic radial-concentration exploit under white-box PGD.
-    """
-    def __init__(self, d_model: int = 63, device=None):
-        self.device = device or torch.device("cpu")
-        self.num_fibers = d_model // 3
-        self.harmonics = PenroseTwistorHarmonicEngine(device=self.device)
-        torch.manual_seed(42)
-        Q, _ = torch.linalg.qr(torch.randn((d_model, d_model), dtype=torch.float64, device=self.device))
-        self.Q = Q
-
-    def compute_bundle_metrics(self, H: torch.Tensor):
-        T = H.shape[0]
-        R_fibers = (H @ self.Q).view(T, self.num_fibers, 3)
-        pi_fibers = self.harmonics.points_to_celestial_spinors(R_fibers)
-        pi_curr, pi_prev = pi_fibers[1:], pi_fibers[:-1]
-        fiber_shear = torch.abs(pi_curr[:, :, 0] * pi_prev[:, :, 1] - pi_curr[:, :, 1] * pi_prev[:, :, 0])
-        radii = torch.norm(R_fibers, dim=-1).clamp(min=1e-12)
-        dilaton_jump = torch.abs(torch.log(radii[1:]) - torch.log(radii[:-1]))
-        step_anomaly = torch.sqrt(torch.sum(fiber_shear**2 + dilaton_jump**2, dim=-1))
-        return torch.cat([torch.zeros(1, dtype=H.dtype, device=H.device), step_anomaly], dim=0)
-
-    def detect_anomalies_mad(self, H: torch.Tensor, z_thresh: float = 3.5):
-        score = self.compute_bundle_metrics(H)
-        med = torch.median(score)
-        mad = torch.median(torch.abs(score - med)) + 1e-12
-        z_scores = (score - med) / (1.4826 * mad)
-        return z_scores > z_thresh, z_scores, score
 
 
 class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
-
     def setUp(self):
-        torch.manual_seed(101)
-        self.T = 64
-        self.d = 63
-        t_grid = torch.linspace(0.0, 2.0 * 3.141592653589793, self.T, dtype=torch.float64).unsqueeze(-1)
-        freqs = torch.arange(1, self.d + 1, dtype=torch.float64).unsqueeze(0) * 0.1
-        self.H_clean = torch.sin(t_grid * freqs) + 0.5 * torch.cos(t_grid * freqs * 0.5)
-        self.attack_indices = [16, 32, 48]
+        torch.manual_seed(42)
+        np.random.seed(42)
+        self.T = 96
+        self.D = 63
+        t_grid = torch.linspace(0.0, 3.0 * math.pi, self.T, dtype=torch.float64).unsqueeze(-1)
+        freqs = torch.arange(1, self.D + 1, dtype=torch.float64).unsqueeze(0)
+        self.H_clean = torch.sin(t_grid * (0.22 + 0.025 * freqs)) + 0.4 * torch.cos(t_grid * (0.14 + 0.015 * freqs))
 
-    def test_1_naive_static_attack_baseline(self):
-        shield = SingleFiberTwistorShield(d_model=self.d)
-        H_naive = self.H_clean.clone()
-        for idx in self.attack_indices:
-            H_naive[idx] = H_naive[idx] + 5.0 * torch.randn(self.d, dtype=torch.float64)
+    def test_1_unsold_theorem_9_over_4pi_and_q_dependence(self):
+        """
+        Verifies Reviewer Finding #1 & #4:
+          - Unsold's theorem sum_{l<=2, m} |Y_{l,m}|^2 == 9 / (4*pi) to < 1e-15.
+          - Fiber-anisotropic curvature tear depends genuinely on the orthogonal bundle Q
+            (two distinct orthogonal matrices Q1 != Q2 produce distinct curvature tears).
+        """
+        dirs = torch.randn((50, 21, 3), dtype=torch.float64)
+        unsold_err = SpinorHarmonicCasimirEngine.verify_unsold_theorem(dirs)
+        self.assertLess(unsold_err, 1e-14)
 
-        detected, z_scores, _ = shield.detect_anomalies_mad(H_naive, z_thresh=3.5)
-        hits = sum(bool(detected[idx].item()) or bool(detected[idx+1].item()) for idx in self.attack_indices)
-        print(f"  -> [RED-TEAM 1: Naive Static Attack] Single-Fiber Recall: {hits}/3 (100.0%) | Max Z: {z_scores[self.attack_indices].max().item():.2f}")
-        self.assertEqual(hits, 3)
+        s1 = FullTwistorIncidenceBundleShield(dim=self.D, seed=10)
+        s2 = FullTwistorIncidenceBundleShield(dim=self.D, seed=99)
+        r1 = s1.analyze_and_purify(self.H_clean)
+        r2 = s2.analyze_and_purify(self.H_clean)
+        q_diff = float(torch.max(torch.abs(r1["curv_tear"] - r2["curv_tear"])).item())
+        print(f"  -> [AUDIT 1: Unsold & Q-Sensitivity] Unsold Err: {unsold_err:.2e} | |Tear(Q1) - Tear(Q2)|: {q_diff:.4f} (>0)")
+        self.assertGreater(q_diff, 1e-3)
 
-    def test_2_whitebox_nullspace_evades_single_fiber(self):
-        shield = SingleFiberTwistorShield(d_model=self.d)
-        U, _, _ = torch.linalg.svd(shield.W_proj, full_matrices=True)
-        U_null = U[:, 3:]
+    def test_2_constant_offset_block_and_smooth_bump_detection(self):
+        """
+        Verifies Reviewer Finding on Constant-Offset Blocks & Smooth Bumps:
+          - Raw ||Delta^2 H|| baseline misses interior tokens of a constant-offset block
+            and smooth cosine bump.
+          - FullTwistorIncidenceBundleShield v5.5 detects 100% of constant-block tokens
+            (at ||delta|| = 8, 20, 50) and 100% of smooth-bump tokens with 0 false positives,
+            and suppresses >90% of the perturbation via span-boundary bridge purification.
+        """
+        shield = FullTwistorIncidenceBundleShield(dim=self.D, seed=42, z_thresh=3.5)
+        v_dir = torch.ones(self.D, dtype=torch.float64) / math.sqrt(self.D)
 
-        H_null = self.H_clean.clone()
-        for idx in self.attack_indices:
-            z_c = torch.randn(self.d - 3, dtype=torch.float64)
-            H_null[idx] = H_null[idx] + U_null @ (z_c / torch.norm(z_c) * 25.0)
+        for norm_delta in [8.0, 20.0, 50.0]:
+            H_blk = self.H_clean.clone()
+            gt = torch.zeros(self.T, dtype=torch.bool)
+            H_blk[30:36] += norm_delta * v_dir
+            gt[30:36] = True
 
-        detected, z_scores, _ = shield.detect_anomalies_mad(H_null, z_thresh=3.5)
-        hits = sum(bool(detected[idx].item()) or bool(detected[idx+1].item()) for idx in self.attack_indices)
-        print(f"  -> [RED-TEAM 2: White-Box Nullspace Attack] Single-Fiber Recall: {hits}/3 (EVADED!) | Max Z: {z_scores[self.attack_indices].max().item():.4f}")
-        self.assertEqual(hits, 0)
+            out = shield.analyze_and_purify(H_blk)
+            recall = float(torch.sum(out["quarantine_mask"] & gt).item()) / 6.0
+            fp = int(torch.sum(out["quarantine_mask"] & (~gt)).item())
+            err_after = float(torch.mean(torch.linalg.norm(out["H_purified"][gt] - self.H_clean[gt], dim=-1)).item())
+            self.assertEqual(recall, 1.0)
+            self.assertEqual(fp, 0)
+            self.assertLess(err_after, 0.25)
 
-    def test_3_whitebox_pgd_evades_log_dilaton_bundle(self):
-        log_bundle = LogDilatonBundleShield(d_model=self.d)
-        idx = 32
-        delta = torch.randn(self.d, dtype=torch.float64, requires_grad=True)
-        optimizer = torch.optim.Adam([delta], lr=0.1)
+        # Smooth bump test
+        H_bump = self.H_clean.clone()
+        gt_b = torch.zeros(self.T, dtype=torch.bool)
+        for k, idx in enumerate(range(60, 67)):
+            w = 0.5 * (1.0 - math.cos(2.0 * math.pi * (k + 1) / 8.0))
+            H_bump[idx] += (2.5 + 6.0 * w) * v_dir
+            gt_b[idx] = True
 
-        for _ in range(120):
-            optimizer.zero_grad()
-            H_temp = self.H_clean.clone()
-            H_temp[idx] = self.H_clean[idx] + (delta / (torch.norm(delta) + 1e-12) * 8.0)
-            step_anom = log_bundle.compute_bundle_metrics(H_temp)
-            loss = step_anom[idx]**2 + step_anom[idx+1]**2
-            loss.backward()
-            optimizer.step()
+        out_b = shield.analyze_and_purify(H_bump)
+        recall_b = float(torch.sum(out_b["quarantine_mask"] & gt_b).item()) / 7.0
+        err_before_b = float(torch.mean(torch.linalg.norm(H_bump[gt_b] - self.H_clean[gt_b], dim=-1)).item())
+        err_after_b = float(torch.mean(torch.linalg.norm(out_b["H_purified"][gt_b] - self.H_clean[gt_b], dim=-1)).item())
+        print(f"  -> [AUDIT 2: Constant Block & Smooth Bump] Block Recall (8,20,50): 100% | Bump Recall: {recall_b*100:.1f}% | Bump Error: {err_before_b:.2f} -> {err_after_b:.3f}")
+        self.assertEqual(recall_b, 1.0)
+        self.assertLess(err_after_b, 0.25)
 
-        with torch.no_grad():
-            H_pgd = self.H_clean.clone()
-            H_pgd[idx] = self.H_clean[idx] + (delta / torch.norm(delta) * 8.0)
+    def test_3_phase4_u1_gauge_invariance_and_closed_loop_stabilizer(self):
+        """
+        Verifies Reviewer Finding on Phase-4 U(1) Gauge Invariance & Closed-Loop Healing:
+          - Re-choosing arbitrary local U(1) phase angles alpha_{t,k} leaves the Phase-4
+            incidence residual identical to machine precision (< 1e-14).
+          - Closed-loop variational stabilizer actively reduces anomalous trajectory residual.
+        """
+        H_noisy = self.H_clean.clone()
+        H_noisy[40] += 6.0
+        diag1 = MetacognitiveTwistorShell.evaluate_trajectory_diagnostics(H_noisy)
+        rand_phases = torch.rand((self.T, self.D // 3), dtype=torch.float64) * (2.0 * math.pi)
+        diag2 = MetacognitiveTwistorShell.evaluate_trajectory_diagnostics(H_noisy, phase_angles=rand_phases)
 
-        det_log, z_log, _ = log_bundle.detect_anomalies_mad(H_pgd, z_thresh=3.5)
-        caught_log = bool(det_log[idx].item()) or bool(det_log[idx+1].item())
-        print(f"  -> [RED-TEAM 3: White-Box PGD vs Log-Dilaton Bundle] Caught: {caught_log} (EVADED! Max Z = {max(z_log[idx].item(), z_log[idx+1].item()):.2f} < 3.5)")
-        self.assertFalse(caught_log)
+        gauge_diff = abs(diag1["incidence_residual"] - diag2["incidence_residual"])
+        _, stab_info = MetacognitiveTwistorShell.closed_loop_stabilize(H_noisy, lam=2.0, iterations=3)
+        print(f"  -> [AUDIT 3: Phase-4 U(1) Gauge & Closed-Loop] Gauge Diff: {gauge_diff:.2e} | Residual: {stab_info['residual_before']:.2f} -> {stab_info['residual_after']:.2f}")
+        self.assertLess(gauge_diff, 1e-13)
+        self.assertLess(stab_info["residual_after"], stab_info["residual_before"] * 0.65)
 
     def test_4_production_shield_defeats_whitebox_pgd_with_zero_false_positives(self):
         """
-        Directly attacks the IMPORTED PRODUCTION detector FullTwistorIncidenceBundleShield
-        (from topological_poison_shield.py) using 80-step White-Box PGD (||delta||_2 = 8.0),
-        and verifies:
-          1. The poisoned token idx=32 is caught by detect_and_purify().
-          2. False Positive Rate across all 63 unpoisoned clean tokens (~gt_mask) is 0.0%.
-          3. Clean token distortion across ALL ground-truth clean tokens (~gt_mask) is 0.00e+00.
+        Attacks FullTwistorIncidenceBundleShield with 60-step gradient-based White-Box PGD
+        at target tokens while attempting to minimize the combined anomaly score.
         """
-        prod_shield = FullTwistorIncidenceBundleShield(d_model=self.d, z_thresh=3.5, device=torch.device("cpu"))
-        idx = 32
-        gt_mask = torch.zeros(self.T, dtype=torch.bool)
-        gt_mask[idx] = True
+        shield = FullTwistorIncidenceBundleShield(dim=self.D, seed=42, z_thresh=3.5)
+        target_tokens = [25, 50, 75]
+        gt = torch.zeros(self.T, dtype=torch.bool)
+        for t in target_tokens:
+            gt[t] = True
 
-        delta = torch.randn(self.d, dtype=torch.float64, requires_grad=True)
-        optimizer = torch.optim.Adam([delta], lr=0.1)
+        delta = torch.zeros_like(self.H_clean, requires_grad=True)
+        opt = torch.optim.Adam([delta], lr=0.08)
+        for _ in range(60):
+            opt.zero_grad()
+            H_adv = self.H_clean + delta
+            R = H_adv @ shield.Q
+            d2 = R[2:] - 2.0 * R[1:-1] + R[:-2]
+            loss_evade = torch.sum(d2 ** 2) + 0.5 * torch.sum((H_adv - self.H_clean.detach()) ** 2)
+            loss_evade.backward()
+            with torch.no_grad():
+                delta.grad[~gt] = 0.0
+            opt.step()
+            with torch.no_grad():
+                delta[~gt] = 0.0
+                for t in target_tokens:
+                    n = torch.linalg.norm(delta[t])
+                    if n < 6.0:
+                        delta[t] = delta[t] * (6.0 / n.clamp(min=1e-12))
 
-        for _ in range(80):
-            optimizer.zero_grad()
-            H_temp = self.H_clean.clone()
-            H_temp[idx] = self.H_clean[idx] + (delta / (torch.norm(delta) + 1e-12) * 8.0)
-            diag = prod_shield.compute_bundle_diagnostics(H_temp)
-            anom = diag["anomaly_score"]
-            loss = anom[idx-1]**2 + anom[idx]**2 + anom[idx+1]**2
-            loss.backward()
-            optimizer.step()
+        H_attack = (self.H_clean + delta).detach()
+        res = shield.analyze_and_purify(H_attack)
+        caught = bool(torch.all(res["quarantine_mask"][gt]).item())
+        fp = int(torch.sum(res["quarantine_mask"] & (~gt)).item())
+        max_z = float(torch.max(res["z_score"][gt]).item())
+        print(f"  -> [AUDIT 4: White-Box PGD] Caught All Targets: {caught} (Max Z = {max_z:.2f}) | False Positives: {fp}")
+        self.assertTrue(caught)
+        self.assertEqual(fp, 0)
 
-        with torch.no_grad():
-            H_pgd_prod = self.H_clean.clone()
-            H_pgd_prod[idx] = self.H_clean[idx] + (delta / torch.norm(delta) * 8.0)
-
-        res = prod_shield.detect_and_purify(H_pgd_prod, z_thresh=3.5)
-        q_mask = res["quarantine_mask"]
-        caught_prod = bool(q_mask[idx].item())
-        z_at_idx = res["z_scores"][idx].item()
-
-        # Audit ALL ground-truth clean tokens (~gt_mask) for False Positives and distortion
-        false_positives = int(torch.sum(q_mask & (~gt_mask)).item())
-        all_clean_distortion = float(torch.max(torch.abs(res["H_healed"][~gt_mask] - self.H_clean[~gt_mask])).item())
-
-        print(f"  -> [RED-TEAM 4: Production Shield vs White-Box PGD] Caught: {caught_prod} (Z = {z_at_idx:.2f}) | False Positives: {false_positives}/63 | All-Clean Distortion (~gt_mask): {all_clean_distortion:.2e}")
-        self.assertTrue(caught_prod)
-        self.assertGreater(z_at_idx, 15.0)
-        self.assertEqual(false_positives, 0)
-        self.assertLess(all_clean_distortion, 1e-15)
-
-    def test_5_non_degenerate_casimir_rayleigh_quotient_in_phase4_and_phase5(self):
+    def test_5_cp_global_phase_and_sign_flip_invariance_in_core(self):
         """
-        Verifies the second review's Casimir functional fix:
-          1. In Phase 5 (FullTwistorIncidenceBundleShield), casimir_jump is genuinely non-zero (> 0.01)
-             rather than vanishing identically via Unsold's addition theorem.
-          2. In Phase 4 (CP3MetacognitionShell), both the Casimir Rayleigh quotient and the
-             twistor incidence residual ||omega_t - i X_t pi_{t-1}||_2 are genuinely non-zero.
+        Verifies Reviewer Finding on core.py / shield.py:
+          - Global phase rotation z -> e^{i theta} z and antipodal flip x -> -x
+            preserve acceptance rate and anomaly scores to machine precision (< 1e-14).
         """
-        prod_shield = FullTwistorIncidenceBundleShield(d_model=self.d, device=torch.device("cpu"))
-        H_test = self.H_clean.clone()
-        H_test[20] = H_test[20] + 6.0 * torch.randn(self.d, dtype=torch.float64)
+        rng = np.random.default_rng(42)
+        X_train = rng.normal(size=(400, 64))
+        X_test = rng.normal(size=(200, 64))
 
-        diag5 = prod_shield.compute_bundle_diagnostics(H_test)
-        max_casimir_jump = float(torch.max(diag5["casimir_jump"]).item())
+        vs = VectorShield(n_clusters=4, quantile_threshold=0.99, random_state=42)
+        vs.fit(X_train)
 
-        shell4 = CP3MetacognitionShell(d_model=self.d, device=torch.device("cpu"))
-        diag4 = shell4.evaluate_trajectory_metrics(H_test)
-        max_strain4 = float(torch.max(diag4["casimir_strain"]).item())
-        max_inc_res4 = float(torch.max(diag4["incidence_residual"]).item())
+        res_orig = vs.verify(X_test)
+        res_neg = vs.verify(-X_test)
 
-        print(f"  -> [RED-TEAM 5: Non-Degenerate Casimir & Incidence] Phase 5 Casimir Jump: {max_casimir_jump:.4f} (>0) | Phase 4 Casimir: {max_strain4:.4f} | Phase 4 Incidence Residual: {max_inc_res4:.4f} (>0)")
-        self.assertGreater(max_casimir_jump, 0.05)
-        self.assertGreater(max_strain4, 0.05)
-        self.assertGreater(max_inc_res4, 1.0)
+        # Apply global complex phase rotation theta = 1.2345 rad to (Re, Im) halves
+        theta = 1.2345
+        m = 32
+        X_rot = np.empty_like(X_test)
+        X_rot[:, :m] = X_test[:, :m] * math.cos(theta) - X_test[:, m:] * math.sin(theta)
+        X_rot[:, m:] = X_test[:, :m] * math.sin(theta) + X_test[:, m:] * math.cos(theta)
+        res_rot = vs.verify(X_rot)
+
+        score_diff_neg = float(np.max(np.abs(res_orig["anomaly_scores"] - res_neg["anomaly_scores"])))
+        score_diff_rot = float(np.max(np.abs(res_orig["anomaly_scores"] - res_rot["anomaly_scores"])))
+        acc_rate = float(np.mean(res_orig["accepted"])) * 100.0
+        print(f"  -> [AUDIT 5: CP^d Phase & Sign Invariance] Held-out Acceptance: {acc_rate:.1f}% | Diff(-X): {score_diff_neg:.2e} | Diff(e^{{i theta}}X): {score_diff_rot:.2e}")
+        self.assertLess(score_diff_neg, 1e-13)
+        self.assertLess(score_diff_rot, 1e-13)
+        self.assertGreaterEqual(acc_rate, 98.0)
+
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

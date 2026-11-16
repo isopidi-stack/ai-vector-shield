@@ -1,119 +1,78 @@
 import math
 import torch
 
-class PenroseTwistorHarmonicEngine:
+class SpinorHarmonicCasimirEngine:
     """
-    Genuine L^2(CP^1) Spherical Harmonic & Conformal Casimir Rayleigh-Quotient Engine.
-    Supports both single 3D point clouds (N, 3) and batched K-fiber bundles (T, K, 3).
+    Evaluates the l <= 2 spherical harmonic basis on S^2 / CP^1 and computes the
+    regularized Rayleigh quotient for the Laplace-Beltrami operator -Delta_{S^2}
+    with eigenvalues lambda_l = l(l+1) in {0, 2, 6}.
+
+    Unsold's Addition Theorem Identity:
+      sum_{l=0}^2 sum_{m=-l}^l |Y_{l,m}(n)|^2 = (1 + 3 + 5) / (4 * pi) = 9 / (4 * pi) approx 0.7161972439.
     """
-    def __init__(self, device=None):
-        self.device = device or torch.device("cpu")
+    UNSOLD_CONSTANT_L2 = 9.0 / (4.0 * math.pi)
 
     @staticmethod
-    def points_to_celestial_spinors(pts_3d: torch.Tensor, camera_center: torch.Tensor = None) -> torch.Tensor:
-        rel = pts_3d - camera_center.unsqueeze(0) if camera_center is not None else pts_3d
-        r = torch.norm(rel, dim=-1, keepdim=True).clamp(min=1e-12)
-        n = rel / r
-        nx, ny, nz = n[..., 0], n[..., 1], n[..., 2]
-
-        c_dtype = torch.complex128 if pts_3d.dtype == torch.float64 else torch.complex64
-        denom = torch.clamp(1.0 + nz, min=1e-12)
-        p0 = torch.sqrt(0.5 * (1.0 + nz).clamp(min=0.0)).to(c_dtype)
-        p1 = torch.complex(nx, ny).to(c_dtype) / torch.sqrt(2.0 * denom).to(c_dtype)
-
-        south_mask = (1.0 + nz) < 1e-10
-        p0 = torch.where(south_mask, torch.zeros_like(p0), p0)
-        p1 = torch.where(south_mask, torch.ones_like(p1), p1)
-        return torch.stack([p0, p1], dim=-1)
-
-    @staticmethod
-    def spinor_to_unit_ray(pi: torch.Tensor) -> torch.Tensor:
-        p0, p1 = pi[..., 0], pi[..., 1]
-        norm_sq = (torch.abs(p0) ** 2 + torch.abs(p1) ** 2).clamp(min=1e-12)
-        nx = 2.0 * torch.real(torch.conj(p0) * p1) / norm_sq
-        ny = 2.0 * torch.imag(torch.conj(p0) * p1) / norm_sq
-        nz = (torch.abs(p0) ** 2 - torch.abs(p1) ** 2) / norm_sq
-        return torch.stack([nx, ny, nz], dim=-1)
-
-    @staticmethod
-    def evaluate_complex_eigenmodes(pi: torch.Tensor) -> dict:
-        n = PenroseTwistorHarmonicEngine.spinor_to_unit_ray(pi)
-        x, y, z = n[..., 0], n[..., 1], n[..., 2]
-        c_dtype = pi.dtype
-
-        Y00  = torch.full_like(x, 0.5 * math.sqrt(1.0 / math.pi)).to(c_dtype)
-        c1   = 0.5 * math.sqrt(1.5 / math.pi)
-        Y1m1 =  c1 * torch.complex(x, -y).to(c_dtype)
-        Y10  =  0.5 * math.sqrt(3.0 / math.pi) * z.to(c_dtype)
-        Y1p1 = -c1 * torch.complex(x,  y).to(c_dtype)
-
-        c2_2 = 0.25 * math.sqrt(7.5 / math.pi)
-        c2_1 = 0.5  * math.sqrt(7.5 / math.pi)
-        c2_0 = 0.25 * math.sqrt(5.0 / math.pi)
-        xy_p = torch.complex(x,  y).to(c_dtype)
-        xy_m = torch.complex(x, -y).to(c_dtype)
-
-        Y2m2 =  c2_2 * (xy_m ** 2)
-        Y2m1 =  c2_1 * z.to(c_dtype) * xy_m
-        Y20  =  c2_0 * (3.0 * (z ** 2) - 1.0).to(c_dtype)
-        Y2p1 = -c2_1 * z.to(c_dtype) * xy_p
-        Y2p2 =  c2_2 * (xy_p ** 2)
-
-        return {
-            (0,  0): Y00,
-            (1, -1): Y1m1, (1, 0): Y10, (1, 1): Y1p1,
-            (2, -2): Y2m2, (2, -1): Y2m1, (2, 0): Y20, (2, 1): Y2p1, (2, 2): Y2p2,
-        }
-
-    @staticmethod
-    def evaluate_real_basis(pi: torch.Tensor) -> torch.Tensor:
-        n = PenroseTwistorHarmonicEngine.spinor_to_unit_ray(pi)
-        x, y, z = n[..., 0], n[..., 1], n[..., 2]
-
-        b00  = torch.full_like(x, 0.5 * math.sqrt(1.0 / math.pi))
-        c1   = 0.5 * math.sqrt(3.0 / math.pi)
-        b1m1 = c1 * y
-        b10  = c1 * z
-        b1p1 = c1 * x
-
-        c2   = 0.5 * math.sqrt(15.0 / math.pi)
-        b2m2 = c2 * x * y
-        b2m1 = c2 * y * z
-        b20  = 0.25 * math.sqrt(5.0 / math.pi) * (3.0 * z * z - 1.0)
-        b2p1 = c2 * x * z
-        b2p2 = 0.5 * c2 * (x * x - y * y)
-
-        return torch.stack([b00, b1m1, b10, b1p1, b2m2, b2m1, b20, b2p1, b2p2], dim=-1)
-
-    def compute_conformal_energy_functional(
-        self,
-        pts_3d: torch.Tensor,
-        camera_center: torch.Tensor = None,
-        ridge_lambda: float = 1e-4,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def evaluate_real_spherical_harmonics_l2(dirs: torch.Tensor) -> torch.Tensor:
         """
-        Projects the empirical radial field f(pi_k) = ||r_k|| / mean(||r||) onto the 9-mode
-        real orthonormal spherical harmonic basis B (shape (..., K, 9)) via ridge-regularized
-        normal equations and evaluates the Laplace-Beltrami / Casimir Rayleigh quotient:
-            E_Casimir = (2 * ||c_{l=1}||^2 + 6 * ||c_{l=2}||^2) / (||c||^2 + 1e-12)
-        Supports both (N, 3) single clouds and (T, K, 3) batched fiber bundles.
+        Evaluates the 9 real orthonormal spherical harmonics Y_{l,m} (l <= 2) on unit vectors dirs (..., 3).
         """
-        rel = pts_3d - camera_center.unsqueeze(0) if camera_center is not None else pts_3d
-        radii = torch.norm(rel, dim=-1).clamp(min=1e-12)  # (..., K)
-        f_field = radii / (torch.mean(radii, dim=-1, keepdim=True) + 1e-12)  # Scale-invariant profile
+        u = dirs / torch.linalg.norm(dirs, dim=-1, keepdim=True).clamp(min=1e-12)
+        x, y, z = u[..., 0], u[..., 1], u[..., 2]
 
-        pi = self.points_to_celestial_spinors(rel)  # (..., K, 2)
-        B = self.evaluate_real_basis(pi)            # (..., K, 9)
+        c0 = math.sqrt(1.0 / (4.0 * math.pi))
+        Y00 = torch.full_like(x, c0)
 
-        K_pts = B.shape[-2]
-        BtB = torch.einsum("...ki,...kj->...ij", B, B) / float(K_pts)  # (..., 9, 9)
-        Btf = torch.einsum("...ki,...k->...i", B, f_field) / float(K_pts)  # (..., 9)
+        c1 = math.sqrt(3.0 / (4.0 * math.pi))
+        Y1_m1 = c1 * y
+        Y1_0  = c1 * z
+        Y1_p1 = c1 * x
 
-        I9 = torch.eye(9, dtype=B.dtype, device=B.device)
-        coeffs = torch.linalg.solve(BtB + ridge_lambda * I9, Btf.unsqueeze(-1)).squeeze(-1)  # (..., 9)
+        c2_xy = 0.5 * math.sqrt(15.0 / math.pi)
+        c2_z2 = 0.25 * math.sqrt(5.0 / math.pi)
+        Y2_m2 = c2_xy * x * y
+        Y2_m1 = c2_xy * y * z
+        Y2_0  = c2_z2 * (3.0 * z * z - 1.0)
+        Y2_p1 = c2_xy * x * z
+        Y2_p2 = 0.5 * c2_xy * (x * x - y * y)
 
-        eigenvalues = torch.tensor([0.0, 2.0, 2.0, 2.0, 6.0, 6.0, 6.0, 6.0, 6.0], dtype=B.dtype, device=B.device)
-        numerator = torch.sum(eigenvalues * (coeffs ** 2), dim=-1)
-        denominator = torch.sum(coeffs ** 2, dim=-1) + 1e-12
-        rayleigh_energy = numerator / denominator
-        return rayleigh_energy, coeffs, pi
+        return torch.stack([Y00, Y1_m1, Y1_0, Y1_p1, Y2_m2, Y2_m1, Y2_0, Y2_p1, Y2_p2], dim=-1)
+
+    @staticmethod
+    def verify_unsold_theorem(dirs: torch.Tensor) -> float:
+        Y = SpinorHarmonicCasimirEngine.evaluate_real_spherical_harmonics_l2(dirs)
+        norm_sq = torch.sum(Y ** 2, dim=-1)
+        return float(torch.max(torch.abs(norm_sq - SpinorHarmonicCasimirEngine.UNSOLD_CONSTANT_L2)).item())
+
+    @staticmethod
+    def compute_casimir_rayleigh_quotient(
+        dirs: torch.Tensor,
+        field_vals: torch.Tensor,
+        ridge_lambda: float = 1e-3,
+        return_diagnostics: bool = False,
+    ):
+        """
+        Fits the 9-mode spherical harmonic expansion to field_vals (T, K) across K fibers
+        and evaluates the Laplacian Rayleigh quotient:
+            E = (2 ||c_1||^2 + 6 ||c_2||^2) / (||c_0||^2 + ||c_1||^2 + ||c_2||^2 + eps).
+        """
+        Y = SpinorHarmonicCasimirEngine.evaluate_real_spherical_harmonics_l2(dirs)  # (T, K, 9)
+        Yt = Y.transpose(-1, -2)  # (T, 9, K)
+        G = torch.matmul(Yt, Y)   # (T, 9, 9)
+        I9 = torch.eye(9, dtype=G.dtype, device=G.device).unsqueeze(0)
+
+        rhs = torch.matmul(Yt, field_vals.unsqueeze(-1)).squeeze(-1)  # (T, 9)
+        coeffs = torch.linalg.solve(G + ridge_lambda * I9, rhs)
+
+        c0_sq = coeffs[:, 0] ** 2
+        c1_sq = torch.sum(coeffs[:, 1:4] ** 2, dim=-1)
+        c2_sq = torch.sum(coeffs[:, 4:9] ** 2, dim=-1)
+
+        num = 2.0 * c1_sq + 6.0 * c2_sq
+        den = c0_sq + c1_sq + c2_sq + 1e-12
+        casimir_e = num / den
+
+        if return_diagnostics:
+            cond_G = torch.linalg.cond(G + ridge_lambda * I9)
+            return casimir_e, {"coeffs": coeffs, "cond_G_max": float(torch.max(cond_G).item())}
+        return casimir_e
