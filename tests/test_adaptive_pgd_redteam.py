@@ -157,13 +157,13 @@ class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
         X_rot[:, m:] = X_test[:, :m] * math.sin(theta) + X_test[:, m:] * math.cos(theta)
         res_rot = vs.inspect(X_rot)
 
-        s_orig = np.asarray(res_orig["residual_score"])
-        s_neg = np.asarray(res_neg["residual_score"])
-        s_rot = np.asarray(res_rot["residual_score"])
+        s_orig = np.asarray([r["residual_score"] for r in res_orig])
+        s_neg = np.asarray([r["residual_score"] for r in res_neg])
+        s_rot = np.asarray([r["residual_score"] for r in res_rot])
 
         score_diff_neg = float(np.max(np.abs(s_orig - s_neg)))
         score_diff_rot = float(np.max(np.abs(s_orig - s_rot)))
-        acc_rate = float(np.mean(res_orig["accepted"])) * 100.0
+        acc_rate = float(np.mean([r["accepted"] for r in res_orig])) * 100.0
         print(f"  -> [AUDIT 5: CP^d Phase & Sign Invariance] Held-out Acceptance: {acc_rate:.1f}% | Diff(-X): {score_diff_neg:.2e} | Diff(e^{{i theta}}X): {score_diff_rot:.2e}")
         self.assertLess(score_diff_neg, 1e-13)
         self.assertLess(score_diff_rot, 1e-13)
