@@ -40,44 +40,26 @@ class FullTwistorIncidenceBundleShield:
     @staticmethod
     def compute_clean_reference_manifold(H: torch.Tensor, window: int = 19) -> torch.Tensor:
         T, D = H.shape
-        half_w = window // 2
-        padded = torch.cat([H[:1].repeat(half_w, 1), H, H[-1:].repeat(half_w, 1)], dim=0)
-        med_traj = torch.median(padded.unfold(0, window, 1), dim=-1).values
-        raw_diff = torch.linalg.norm(H - med_traj, dim=-1)
-        med_raw = torch.median(raw_diff)
-        rough_clean = raw_diff <= torch.clamp(3.8 * med_raw, min=1.35)
-        if int(torch.sum(rough_clean).item()) < 16:
-            return med_traj
-        H_ref = H.clone()
-        idx = 0
-        while idx < T:
-            if bool(rough_clean[idx].item()):
-                idx += 1
-                continue
-            s = idx
-            while idx < T and not bool(rough_clean[idx].item()):
-                idx += 1
-            e = idx - 1
-            l_a, r_a = s - 1, e + 1
-            if l_a >= 0 and r_a < T:
-                dt = float(r_a - l_a)
-                p0, p1 = H[l_a], H[r_a]
-                m0 = (H[l_a] - H[l_a - 1]) if (l_a >= 1 and bool(rough_clean[l_a - 1].item())) else ((p1 - p0) / dt)
-                m1 = (H[r_a + 1] - H[r_a]) if (r_a + 1 < T and bool(rough_clean[r_a + 1].item())) else ((p1 - p0) / dt)
-                for t in range(s, e + 1):
-                    u = float(t - l_a) / dt
-                    h00 = 2.0 * (u ** 3) - 3.0 * (u ** 2) + 1.0
-                    h10 = (u ** 3) - 2.0 * (u ** 2) + u
-                    h01 = -2.0 * (u ** 3) + 3.0 * (u ** 2)
-                    h11 = (u ** 3) - (u ** 2)
-                    H_ref[t] = h00 * p0 + h10 * dt * m0 + h01 * p1 + h11 * dt * m1
-            elif l_a >= 0:
-                H_ref[s : e + 1] = H[l_a].unsqueeze(0)
-            elif r_a < T:
-                H_ref[s : e + 1] = H[r_a].unsqueeze(0)
-            else:
-                H_ref[s : e + 1] = med_traj[s : e + 1]
-        return H_ref
+        hw = window // 2
+        pad = torch.cat([H[:1].repeat(hw, 1), H, H[-1:].repeat(hw, 1)], dim=0)
+        med = torch.median(pad.unfold(0, window, 1), dim=-1).values
+        d2 = torch.zeros(T, dtype=H.dtype, device=H.device)
+        d2[1:-1] = torch.linalg.norm(H[2:] - 2.0 * H[1:-1] + H[:-2], dim=-1)
+        d2[0], d2[-1] = d2[1], d2[-2]
+        md2 = torch.median(d2)
+        zd2 = (d2 - md2) / (1.4826 * torch.median(torch.abs(d2 - md2)).clamp(min=1e-6))
+        rd = torch.linalg.norm(H - med, dim=-1)
+        mrd = torch.median(rd)
+        out = (zd2 > 3.2) | ((rd > 1.15) & (rd > 2.5 * mrd))
+        for _ in range(window):
+            ln = torch.cat([out[1:], torch.zeros(1, dtype=torch.bool, device=H.device)])
+            rn = torch.cat([torch.zeros(1, dtype=torch.bool, device=H.device), out[:-1]])
+            g = (ln | rn) & (rd > 0.70) & (rd > 1.6 * mrd)
+            if not bool(torch.any(g & (~out)).item()): break
+            out = out | g
+        rc = ~out
+        if int(torch.sum(rc).item()) < 16: return med
+        return FullTwistorIncidenceBundleShield.purify_contiguous_spans(H, med, out)
 
     def analyze_and_purify(self, H: torch.Tensor, ref_window: int = 19) -> dict:
         H = H.to(dtype=torch.float64, device=self.device)
@@ -124,7 +106,9 @@ class FullTwistorIncidenceBundleShield:
         # 5. Edge-Preserving Reference Tube Residual (catches constant-offset blocks & smooth bumps!)
         H_ref = self.compute_clean_reference_manifold(H, window=ref_window)
         tube_res = torch.linalg.norm(H - H_ref, dim=-1)
-        z_tube = self.robust_z_score(tube_res)
+        med_t = torch.median(tube_res)
+        mad_t = torch.median(torch.abs(tube_res - med_t)).clamp(min=0.05)
+        z_tube = (tube_res - med_t) / (1.4826 * mad_t)
         med_tube = torch.median(tube_res)
 
         z_curv = self.robust_z_score(curv_tear)
@@ -134,7 +118,7 @@ class FullTwistorIncidenceBundleShield:
 
         med_s = torch.median(local_spike)
         impulse_flag = (z_spike > self.z_thresh) & (local_spike > 2.2 * med_s)
-        block_or_bump_flag = (tube_res > 1.25) & (z_tube > self.z_thresh)
+        block_or_bump_flag = (tube_res > 0.85) & (z_tube > self.z_thresh)
 
         quarantine_mask = impulse_flag | block_or_bump_flag
         z_combined = torch.maximum(z_spike, z_tube)
