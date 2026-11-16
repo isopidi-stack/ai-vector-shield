@@ -43,22 +43,33 @@ class FullTwistorIncidenceBundleShield:
         hw = window // 2
         pad = torch.cat([H[:1].repeat(hw, 1), H, H[-1:].repeat(hw, 1)], dim=0)
         med = torch.median(pad.unfold(0, window, 1), dim=-1).values
-        d2 = torch.zeros(T, dtype=H.dtype, device=H.device)
-        d2[1:-1] = torch.linalg.norm(H[2:] - 2.0 * H[1:-1] + H[:-2], dim=-1)
-        d2[0], d2[-1] = d2[1], d2[-2]
-        md2 = torch.median(d2)
-        zd2 = (d2 - md2) / (1.4826 * torch.median(torch.abs(d2 - md2)).clamp(min=1e-6))
+        d1 = torch.linalg.norm(H[1:] - H[:-1], dim=-1)
+        md1 = torch.median(d1)
+        zd1 = (d1 - md1) / (1.4826 * torch.median(torch.abs(d1 - md1)).clamp(min=1e-6))
+        ce = torch.zeros(T, dtype=H.dtype, device=H.device)
+        cp = (-H[:-4] + 4.0 * H[1:-3] + 4.0 * H[3:-1] - H[4:]) / 6.0
+        ce[2:-2] = torch.linalg.norm(H[2:-2] - cp, dim=-1)
+        ce[:2], ce[-2:] = ce[2], ce[-3]
+        mce = torch.median(ce)
         rd = torch.linalg.norm(H - med, dim=-1)
         mrd = torch.median(rd)
-        out = (zd2 > 3.2) | ((rd > 1.15) & (rd > 2.5 * mrd))
+        out = (ce > 6.0 * mce) & (rd > 1.65 * mrd)
+        hs = torch.nonzero(zd1 > 3.5, as_tuple=False).flatten().tolist()
+        for a in range(len(hs)):
+            for b in range(a + 1, len(hs)):
+                sc, ec = hs[a] + 1, hs[b]
+                if 1 <= (ec - sc + 1) <= (window // 2 + 2):
+                    ji, jo = H[sc] - H[sc - 1], H[ec + 1] - H[ec]
+                    cs = torch.sum(ji * jo) / (torch.linalg.norm(ji) * torch.linalg.norm(jo) + 1e-12)
+                    if float(cs.item()) < -0.55: out[sc : ec + 1] = True
         for _ in range(window):
             ln = torch.cat([out[1:], torch.zeros(1, dtype=torch.bool, device=H.device)])
             rn = torch.cat([torch.zeros(1, dtype=torch.bool, device=H.device), out[:-1]])
-            g = (ln | rn) & (rd > 0.70) & (rd > 1.6 * mrd)
+            g = (ln | rn) & (rd > 1.50 * mrd) & (rd > 1.85)
             if not bool(torch.any(g & (~out)).item()): break
             out = out | g
-        rc = ~out
-        if int(torch.sum(rc).item()) < 16: return med
+        out = out & (rd > 1.35 * mrd)
+        if int(torch.sum(~out).item()) < 16: return med
         return FullTwistorIncidenceBundleShield.purify_contiguous_spans(H, med, out)
 
     def analyze_and_purify(self, H: torch.Tensor, ref_window: int = 19) -> dict:
@@ -117,8 +128,8 @@ class FullTwistorIncidenceBundleShield:
         z_spike = 0.65 * z_curv + 0.20 * z_shear + 0.15 * z_cas
 
         med_s = torch.median(local_spike)
-        impulse_flag = (z_spike > self.z_thresh) & (local_spike > 2.2 * med_s) & (local_spike > 0.25 * curv_tear)
-        block_or_bump_flag = (tube_res > 0.85) & (z_tube > self.z_thresh)
+        impulse_flag = (z_spike > self.z_thresh) & (local_spike > 2.2 * med_s) & (local_spike > 0.30 * curv_tear)
+        block_or_bump_flag = (tube_res > 1.25) & (z_tube > self.z_thresh)
 
         quarantine_mask = impulse_flag | block_or_bump_flag
         z_combined = torch.maximum(z_spike, z_tube)

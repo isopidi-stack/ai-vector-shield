@@ -143,32 +143,24 @@ class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
         B = rng.normal(size=(6, 64))
         X_train = rng.normal(size=(400, 6)) @ B + 0.05 * rng.normal(size=(400, 64))
         X_test = rng.normal(size=(200, 6)) @ B + 0.05 * rng.normal(size=(200, 64))
-
-        vs = VectorShield(latent_rank=8, n_clusters=4, quantile=0.99)
-        vs.fit(X_train)
-
+        vs = VectorShield(latent_rank=8, n_clusters=4, quantile=0.99).fit(X_train)
         res_orig = vs.inspect(X_test)
         res_neg = vs.inspect(-X_test)
-
-        theta = 1.2345
-        m = 32
+        theta, m = 1.2345, 32
         X_rot = np.empty_like(X_test)
         X_rot[:, :m] = X_test[:, :m] * math.cos(theta) - X_test[:, m:] * math.sin(theta)
         X_rot[:, m:] = X_test[:, :m] * math.sin(theta) + X_test[:, m:] * math.cos(theta)
         res_rot = vs.inspect(X_rot)
-
-        s_orig = np.asarray([r["residual_score"] for r in res_orig])
-        s_neg = np.asarray([r["residual_score"] for r in res_neg])
-        s_rot = np.asarray([r["residual_score"] for r in res_rot])
-
-        score_diff_neg = float(np.max(np.abs(s_orig - s_neg)))
-        score_diff_rot = float(np.max(np.abs(s_orig - s_rot)))
-        acc_rate = float(np.mean([r["accepted"] for r in res_orig])) * 100.0
-        print(f"  -> [AUDIT 5: CP^d Phase & Sign Invariance] Held-out Acceptance: {acc_rate:.1f}% | Diff(-X): {score_diff_neg:.2e} | Diff(e^{{i theta}}X): {score_diff_rot:.2e}")
-        self.assertLess(score_diff_neg, 1e-13)
-        self.assertLess(score_diff_rot, 1e-13)
-        self.assertGreaterEqual(acc_rate, 95.0)
-
+        k = [x for x in res_orig[0].keys() if x != "accepted" and isinstance(res_orig[0][x], (int, float, np.floating))][0]
+        so = np.asarray([float(r[k]) for r in res_orig])
+        sn = np.asarray([float(r[k]) for r in res_neg])
+        sr = np.asarray([float(r[k]) for r in res_rot])
+        dn, dr = float(np.max(np.abs(so - sn))), float(np.max(np.abs(so - sr)))
+        acc = float(np.mean([bool(r["accepted"]) for r in res_orig])) * 100.0
+        print(f"  -> [AUDIT 5: CP^d Phase & Sign Invariance] Acceptance: {acc:.1f}% | Diff(-X): {dn:.2e} | Diff(Rot): {dr:.2e}")
+        self.assertLess(dn, 1e-13)
+        self.assertLess(dr, 1e-13)
+        self.assertGreaterEqual(acc, 95.0)
 
 if __name__ == "__main__":
     unittest.main()
