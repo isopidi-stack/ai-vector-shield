@@ -181,7 +181,8 @@ class MetacognitiveTwistorShell:
         return psi / norms
 
     @classmethod
-    @classmethod
+    
+        @classmethod
     def evaluate_trajectory_diagnostics(cls, H, horizons=(1, 2, 4)):
         psi = cls.lift_to_complex_projective_fibers(H)
         return cls.compute_incidence_residual(psi, horizons)
