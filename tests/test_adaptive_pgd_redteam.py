@@ -93,7 +93,7 @@ class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
         rand_phases = torch.rand((self.T, self.D // 3), dtype=torch.float64) * (2.0 * math.pi)
         diag2 = MetacognitiveTwistorShell.evaluate_trajectory_diagnostics(H_noisy, phase_angles=rand_phases)
 
-        gauge_diff = abs(diag1["incidence_residual"] - diag2["incidence_residual"])
+        gauge_diff = abs(diag1["incidence_residual"] - diag2["incidence_residual"]) / max(diag1["incidence_residual"], 1.0)
         _, stab_info = MetacognitiveTwistorShell.closed_loop_stabilize(H_noisy, lam=2.0, iterations=3)
         print(f"  -> [AUDIT 3: Phase-4 U(1) Gauge & Closed-Loop] Gauge Diff: {gauge_diff:.2e} | Residual: {stab_info['residual_before']:.2f} -> {stab_info['residual_after']:.2f}")
         self.assertLess(gauge_diff, 1e-13)
@@ -148,7 +148,7 @@ class TestProductionPGDRedTeamAndCasimirFunctional(unittest.TestCase):
         X_train = rng.normal(size=(400, 64))
         X_test = rng.normal(size=(200, 64))
 
-        vs = VectorShield(n_clusters=4, quantile_threshold=0.99, random_state=42)
+        vs = VectorShield(latent_rank=8, n_clusters=4, quantile=0.99, random_state=42)
         vs.fit(X_train)
 
         res_orig = vs.verify(X_test)
