@@ -5,6 +5,8 @@ exact O(1) sliding-window density matrix vs EWMA, and remainder-safe fiber extra
 """
 
 import torch
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from argon_v6_core import (
     SIGMA_5,
     CP4_CASIMIR_SPECTRUM,
@@ -84,3 +86,4 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"[PASS] {name}")
+
