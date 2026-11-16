@@ -5,7 +5,6 @@ exact O(1) sliding-window density matrix vs EWMA, and remainder-safe fiber extra
 """
 
 import torch
-import pytest
 from argon_v6_core import (
     SIGMA_5,
     CP4_CASIMIR_SPECTRUM,
@@ -77,3 +76,11 @@ def test_non_divisible_dimension_fiber_padding():
         assert fibers.shape[-2] * 3 == d + pad_len
         # Sum of elements is preserved without truncation
         assert torch.isclose(fibers.sum(), x.sum())
+
+if __name__ == "__main__":
+    import sys, os
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    for name, fn in sorted( list(globals().items()) ):
+        if name.startswith("test_") and callable(fn):
+            fn()
+            print(f"[PASS] {name}")
