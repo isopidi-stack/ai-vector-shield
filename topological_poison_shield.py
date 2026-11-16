@@ -117,7 +117,7 @@ class FullTwistorIncidenceBundleShield:
         z_spike = 0.65 * z_curv + 0.20 * z_shear + 0.15 * z_cas
 
         med_s = torch.median(local_spike)
-        impulse_flag = (z_spike > self.z_thresh) & (local_spike > 2.2 * med_s)
+        impulse_flag = (z_spike > self.z_thresh) & (local_spike > 2.2 * med_s) & (local_spike > 0.25 * curv_tear)
         block_or_bump_flag = (tube_res > 0.85) & (z_tube > self.z_thresh)
 
         quarantine_mask = impulse_flag | block_or_bump_flag
