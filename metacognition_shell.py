@@ -183,12 +183,7 @@ class MetacognitiveTwistorShell:
     @classmethod
     
         @classmethod
-    @classmethod
-    def evaluate_trajectory_diagnostics(cls, H, horizons=(1, 2, 4)):
-        psi = cls.lift_to_complex_projective_fibers(H)
-        return cls.compute_incidence_residual(psi, horizons)
-
-    @classmethod
+    
     def compute_incidence_residual(cls, psi: torch.Tensor, horizons: tuple = (1, 2, 4)) -> dict:
         psi_norm = psi / torch.linalg.norm(psi, dim=-1, keepdim=True).clamp(min=1e-14)
         T, K, _ = psi_norm.shape
