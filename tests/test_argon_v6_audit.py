@@ -18,6 +18,9 @@ from argon_v6_core import (
     compute_berry_holonomy,
     PalatialRingBuffer,
     extract_3d_fibers_padded,
+    compute_sigma5_freedom_matrix,
+    build_five_quantum_twistor_state,
+    apply_googly_chiral_patch_coupling,
 )
 
 
@@ -114,9 +117,39 @@ def test_adaptive_block_and_bump_detection():
     assert m["clean_token_distortion"] == 0.0
 
 
+def test_penrose_five_quantum_rules_and_25_sigma5_freedoms():
+    """
+    Verifies the 5-Quantum-Number Dual-Spinor (omega^A, pi_{A'}) & 25-Element SIGMA_5 Postulate
+    and unitary Googly chiral patch coupling inside ai-vector-shield.
+    """
+    assert SIGMA_5.numel() == 25
+    n = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    l = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    m = torch.tensor([0.0, 0.0], dtype=torch.float64)
+    s_omega = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    s_pi = torch.tensor([0.5, -0.5], dtype=torch.float64)
+
+    res = build_five_quantum_twistor_state(n, l, m, s_omega, s_pi)
+    assert res["freedom_matrix_25"].shape == (2, 5, 5)
+    assert res["freedom_matrix_25"][0].numel() == 25
+    tr_25 = torch.einsum("...ii->...", res["freedom_matrix_25"]).real
+    assert torch.allclose(tr_25, res["sigma5_norm_complete"], atol=1e-12)
+    assert torch.all(torch.abs(res["core_electron_spinor_coupling"]) > 1.5)
+
+    g_out = apply_googly_chiral_patch_coupling(
+        res["Z5_complete"],
+        res["Z5_complete"].conj(),
+        epsilon_googly=0.05
+    )
+    I5 = torch.eye(5, dtype=torch.complex128).unsqueeze(0).expand(2, 5, 5)
+    U = g_out["U_googly"]
+    assert torch.allclose(torch.matmul(U, U.conj().transpose(-1, -2)), I5, atol=1e-12)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"[PASS] {name}")
+
 
