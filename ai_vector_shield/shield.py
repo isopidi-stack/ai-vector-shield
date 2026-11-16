@@ -26,7 +26,7 @@ def _u1_canon_any(x):
         res = res.squeeze(0)
     return res.to(x.dtype) if is_t else res.numpy()
 
-﻿import time
+import time
 import torch
 import numpy as np
 from .core import AIVectorShield
