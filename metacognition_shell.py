@@ -155,8 +155,12 @@ class MetacognitiveTwistorShell:
         psi = cls.lift_to_complex_projective_fibers(H)
         return cls.compute_incidence_residual(psi, horizons)
 
-    @classmethod
-    def compute_incidence_residual(cls, psi: torch.Tensor, horizons: tuple = (1, 2, 4)) -> dict:
+        @classmethod
+    def compute_incidence_residual(cls, input_tensor: torch.Tensor, horizons: tuple = (1, 2, 4)) -> dict:
+        if input_tensor.ndim == 2:
+            psi = cls.lift_to_complex_projective_fibers(input_tensor)
+        else:
+            psi = input_tensor
         psi_norm = psi / torch.linalg.norm(psi, dim=-1, keepdim=True).clamp(min=1e-14)
         T, K, _ = psi_norm.shape
         total_res = torch.zeros(1, dtype=torch.float64, device=psi.device)
@@ -193,6 +197,9 @@ class MetacognitiveTwistorShell:
             "standing_wave_entropy": palatial["standing_wave_entropy"],
         }
 
+    @classmethod
+    def evaluate_trajectory_diagnostics(cls, H, horizons=(1, 2, 4)):
+        return cls.compute_incidence_residual(H, horizons)
     def closed_loop_stabilize(self, H: torch.Tensor) -> dict:
         H_curr = H.clone().to(torch.float64)
         psi_init = self.lift_to_complex_projective_fibers(H_curr)
