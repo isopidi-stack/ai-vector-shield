@@ -14,40 +14,40 @@ function Get-PythonExe($repo) {
 }
 
 Write-Host "`n=======================================================" -ForegroundColor Cyan
-Write-Host " [1/2] RUNNING TWISTOR-RENDER-CORE AUDIT SUITE (26 TESTS)" -ForegroundColor Cyan
+Write-Host " [1/2] RUNNING TWISTOR-RENDER-CORE UNIT TEST SUITE" -ForegroundColor Cyan
 Write-Host "=======================================================" -ForegroundColor Cyan
 
 Set-Location $corePath
-git status -s
 $pyCore = Get-PythonExe $corePath
 $env:PYTHONPATH = $corePath
 & $pyCore -m unittest discover -s "$corePath\tests" -p "test_*.py" -v
-
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "`n[SUCCESS] Twistor-Render-Core 26 unit tests passed!" -ForegroundColor Green
-} else {
-    Write-Host "`n[FAILURE] Twistor-Render-Core tests failed." -ForegroundColor Red
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`n[FAILURE] Twistor-Render-Core unit tests failed!" -ForegroundColor Red
     exit 1
 }
+Write-Host "`n[SUCCESS] Twistor-Render-Core unit tests passed!" -ForegroundColor Green
 
 Write-Host "`n=======================================================" -ForegroundColor Cyan
-Write-Host " [2/2] RUNNING AI-VECTOR-SHIELD RED-TEAM SUITE & BENCHMARK" -ForegroundColor Cyan
+Write-Host " [2/2] RUNNING AI-VECTOR-SHIELD BENCHMARK & UNIT TESTS" -ForegroundColor Cyan
 Write-Host "=======================================================" -ForegroundColor Cyan
 
 Set-Location $shieldPath
-git status -s
 $pyShield = Get-PythonExe $shieldPath
 $env:PYTHONPATH = $shieldPath
-& $pyShield "$shieldPath\topological_poison_shield.py"
-& $pyShield -m unittest discover -s "$shieldPath\tests" -p "test_*.py" -v
 
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "`n[SUCCESS] AI-Vector-Shield tests and benchmark passed!" -ForegroundColor Green
-} else {
-    Write-Host "`n[FAILURE] AI-Vector-Shield tests failed." -ForegroundColor Red
+& $pyShield "$shieldPath\topological_poison_shield.py"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`n[FAILURE] AI-Vector-Shield benchmark failed!" -ForegroundColor Red
     exit 1
 }
 
+& $pyShield -m unittest discover -s "$shieldPath\tests" -p "test_*.py" -v
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`n[FAILURE] AI-Vector-Shield unit tests failed!" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "`n[SUCCESS] AI-Vector-Shield benchmark and unit tests passed!" -ForegroundColor Green
 Write-Host "`n=======================================================" -ForegroundColor Cyan
 Write-Host " ALL REPOSITORIES VERIFIED & GREEN AT $(Get-Date) " -ForegroundColor Green
 Write-Host "=======================================================" -ForegroundColor Cyan
