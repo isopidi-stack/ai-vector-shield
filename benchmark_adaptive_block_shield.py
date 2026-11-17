@@ -46,7 +46,7 @@ def compute_spinor_directional_shear(H_seq: torch.Tensor) -> torch.Tensor:
 
 def estimate_robust_reference_trajectory(
     H_seq: torch.Tensor,
-    window_radius: int = 16,
+    window_radius: int = 12,
     valid_mask: torch.Tensor = None
 ) -> torch.Tensor:
     """
@@ -92,8 +92,8 @@ def estimate_robust_reference_trajectory(
 
 def detect_and_purify_trajectory(
     H_observed: torch.Tensor,
-    window_radius: int = 16,
-    z_threshold: float = 3.8
+    window_radius: int = 12,
+    z_threshold: float = 4.05
 ) -> Dict[str, torch.Tensor]:
     """
     Executes the v6.1 Reference-Tube + Spinor Shear detector:
@@ -110,7 +110,7 @@ def detect_and_purify_trajectory(
     H_ref_init = estimate_robust_reference_trajectory(H_observed, window_radius=window_radius)
     residual_t = torch.linalg.norm(H_observed - H_ref_init, dim=-1)
     res_med = torch.median(residual_t)
-    res_mad = torch.median(torch.abs(residual_t - res_med)).clamp(min=0.065)
+    res_mad = torch.median(torch.abs(residual_t - res_med)).clamp(min=0.032)
     B_t = (residual_t - res_med) > (z_threshold * 1.4826 * res_mad)
 
     quarantine_mask = I_t | B_t
@@ -118,7 +118,7 @@ def detect_and_purify_trajectory(
     # 3. Re-fit clean reference strictly on unquarantined tokens to purify flagged spans
     H_ref_clean = estimate_robust_reference_trajectory(
         H_observed,
-        window_radius=window_radius + 4,
+        window_radius=window_radius + 2,
         valid_mask=~quarantine_mask
     )
     H_purified = torch.where(quarantine_mask.unsqueeze(-1), H_ref_clean, H_observed)
@@ -169,7 +169,7 @@ def run_adaptive_benchmark() -> Dict[str, float]:
     H_attacked[132] -= 3.0 * direction_block.squeeze(0)
     ground_truth_attack_mask[132] = True
 
-    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=3.8)
+    out = detect_and_purify_trajectory(H_attacked, window_radius=12, z_threshold=4.05)
     pred_mask = out["quarantine_mask"]
     H_purified = out["H_purified"]
 
@@ -214,6 +214,7 @@ if __name__ == "__main__":
     print(f"  Attacked Span Mean L2 (Purif) : {metrics['purified_attack_l2']:.4f} (-{metrics['error_reduction_ratio']:.1f}% error)")
     print(f"  Unflagged Clean Distortion    : {metrics['clean_token_distortion']:.6f}")
     print("================================================================")
+
 
 
 
