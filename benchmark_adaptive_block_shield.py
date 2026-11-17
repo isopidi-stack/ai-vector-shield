@@ -95,7 +95,7 @@ def estimate_robust_reference_trajectory(
 def detect_and_purify_trajectory(
     H_observed: torch.Tensor,
     window_radius: int = 16,
-    z_threshold: float = 3.78
+    z_threshold: float = 3.95
 ) -> Dict[str, torch.Tensor]:
     """
     Executes the v6.1 Reference-Tube + Spinor Shear detector:
@@ -106,7 +106,10 @@ def detect_and_purify_trajectory(
     shear_t = compute_spinor_directional_shear(H_observed)
     shear_med = torch.median(shear_t)
     shear_mad = torch.median(torch.abs(shear_t - shear_med)).clamp(min=1e-6)
-    I_t = (shear_t - shear_med) > (z_threshold * 1.4826 * shear_mad)
+    I_raw = (shear_t - shear_med) > (z_threshold * 1.4826 * shear_mad)
+    is_peak = torch.ones_like(I_raw)
+    is_peak[1:-1] = (shear_t[1:-1] >= shear_t[:-2]) & (shear_t[1:-1] >= shear_t[2:])
+    I_t = I_raw & is_peak
 
     # 2. Reference-tube residual statistic (block & smooth Gaussian bump detector B_t)
     H_ref_init = estimate_robust_reference_trajectory(H_observed, window_radius=window_radius, degree=4)
@@ -128,7 +131,7 @@ def detect_and_purify_trajectory(
     D2 = eye[2:] - 2.0 * eye[1:-1] + eye[:-2]
     D3 = eye[3:] - 3.0 * eye[2:-1] + 3.0 * eye[1:-2] - eye[:-3]
     W_diag = (~quarantine_mask).to(torch.float64)
-    A_sys = torch.diag(W_diag) + 4.5 * (D2.T @ D2) + 2.0 * (D3.T @ D3)
+    A_sys = torch.diag(W_diag) + 24.0 * (D2.T @ D2) + 110.0 * (D3.T @ D3)
     H_spline = torch.linalg.solve(A_sys, W_diag.unsqueeze(-1) * H_observed)
     H_purified = torch.where(quarantine_mask.unsqueeze(-1), H_spline, H_observed)
 
@@ -178,7 +181,7 @@ def run_adaptive_benchmark() -> Dict[str, float]:
     H_attacked[132] -= 3.0 * direction_block.squeeze(0)
     ground_truth_attack_mask[132] = True
 
-    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=3.78)
+    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=3.95)
     pred_mask = out["quarantine_mask"]
     H_purified = out["H_purified"]
 
@@ -223,6 +226,7 @@ if __name__ == "__main__":
     print(f"  Attacked Span Mean L2 (Purif) : {metrics['purified_attack_l2']:.4f} (-{metrics['error_reduction_ratio']:.1f}% error)")
     print(f"  Unflagged Clean Distortion    : {metrics['clean_token_distortion']:.6f}")
     print("================================================================")
+
 
 
 
