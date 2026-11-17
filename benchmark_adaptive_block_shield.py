@@ -95,7 +95,7 @@ def estimate_robust_reference_trajectory(
 def detect_and_purify_trajectory(
     H_observed: torch.Tensor,
     window_radius: int = 16,
-    z_threshold: float = 3.95
+    z_threshold: float = 4.65
 ) -> Dict[str, torch.Tensor]:
     """
     Executes the v6.1 Reference-Tube + Spinor Shear detector:
@@ -125,15 +125,16 @@ def detect_and_purify_trajectory(
 
 
 
-    # 3. Global minimum-curvature spline reconstruction (D_2^T D_2 + D_3^T D_3) anchored on unquarantined tokens
-    T_len = H_observed.shape[0]
-    eye = torch.eye(T_len, dtype=torch.float64, device=H_observed.device)
-    D2 = eye[2:] - 2.0 * eye[1:-1] + eye[:-2]
-    D3 = eye[3:] - 3.0 * eye[2:-1] + 3.0 * eye[1:-2] - eye[:-3]
-    W_diag = (~quarantine_mask).to(torch.float64)
-    A_sys = torch.diag(W_diag) + 24.0 * (D2.T @ D2) + 110.0 * (D3.T @ D3)
-    H_spline = torch.linalg.solve(A_sys, W_diag.unsqueeze(-1) * H_observed)
-    H_purified = torch.where(quarantine_mask.unsqueeze(-1), H_spline, H_observed)
+    # 3. Clean-anchored low-rank harmonic subspace reconstruction (rank-12 temporal SVD)
+    clean_idx = ~quarantine_mask
+    U, S, Vh = torch.linalg.svd(H_observed[clean_idx], full_matrices=False)
+    V_basis = Vh[:12]  # (12, D) spatial harmonic modes learned strictly from clean tokens
+    H_proj = (H_observed @ V_basis.T) @ V_basis
+    # Smooth reconstructed span with 5-tap Savitzky-Golay / binomial kernel to remove residual sensor noise
+    H_pad = torch.nn.functional.pad(H_proj.T.unsqueeze(0), (2, 2), mode="replicate")
+    kernel = torch.tensor([[[1.0, 4.0, 6.0, 4.0, 1.0]]], dtype=torch.float64, device=H_observed.device) / 16.0
+    H_smooth = torch.nn.functional.conv1d(H_pad, kernel.expand(H_observed.shape[1], 1, 5), groups=H_observed.shape[1]).squeeze(0).T
+    H_purified = torch.where(quarantine_mask.unsqueeze(-1), H_smooth, H_observed)
 
     return {
         "quarantine_mask": quarantine_mask,
@@ -181,7 +182,7 @@ def run_adaptive_benchmark() -> Dict[str, float]:
     H_attacked[132] -= 3.0 * direction_block.squeeze(0)
     ground_truth_attack_mask[132] = True
 
-    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=3.95)
+    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=4.65)
     pred_mask = out["quarantine_mask"]
     H_purified = out["H_purified"]
 
@@ -226,6 +227,7 @@ if __name__ == "__main__":
     print(f"  Attacked Span Mean L2 (Purif) : {metrics['purified_attack_l2']:.4f} (-{metrics['error_reduction_ratio']:.1f}% error)")
     print(f"  Unflagged Clean Distortion    : {metrics['clean_token_distortion']:.6f}")
     print("================================================================")
+
 
 
 
