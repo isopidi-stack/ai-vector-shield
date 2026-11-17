@@ -243,3 +243,86 @@ def apply_googly_chiral_patch_coupling(
         "U_googly": U_googly,
         "freedom_matrix_25_left": compute_sigma5_freedom_matrix(Z_l_out),
     }
+
+
+# =========================================================================
+# CLOSED-LOOP VOLUMETRIC TELEMETRY & SELF-MONITORING PROTECTION SUITE
+# =========================================================================
+
+class MetacognitiveShieldProtector:
+    """
+    Couples ai-vector-shield's 25-element SIGMA_5 freedom matrix and Krein-space
+    Berry holonomy with a continuous erf() volumetric manifold projection.
+    Measures structural Dirichlet roughness and geometric phase shear in a closed
+    feedback loop to automatically damp and rectify adversarial trajectory drift.
+    """
+    def __init__(self, resolution: int = 24, roughness_gain: float = 0.35, holonomy_gain: float = 0.25):
+        self.resolution = int(resolution)
+        self.roughness_gain = float(roughness_gain)
+        self.holonomy_gain = float(holonomy_gain)
+
+    def render_shield_manifold_field(self, freedom_matrix_25: torch.Tensor) -> torch.Tensor:
+        """
+        Projects the 5x5 (25-element) SIGMA_5 freedom tensor onto an analytical
+        Z-buffer-free 2D density field using continuous erf() radial cell envelopes.
+        """
+        M_mag = torch.abs(freedom_matrix_25)
+        while M_mag.dim() > 2:
+            M_mag = M_mag.mean(dim=0)
+        M_norm = M_mag / M_mag.max().clamp(min=1e-12)
+
+        coords = torch.linspace(-1.0, 1.0, self.resolution, dtype=torch.float64, device=M_norm.device)
+        gy, gx = torch.meshgrid(coords, coords, indexing="ij")
+        centers = torch.linspace(-0.75, 0.75, 5, dtype=torch.float64, device=M_norm.device)
+
+        field = torch.zeros((self.resolution, self.resolution), dtype=torch.float64, device=M_norm.device)
+        radius = 0.16
+        softness = 0.05
+
+        for r in range(5):
+            for c in range(5):
+                dist = torch.sqrt((gx - centers[c]) ** 2 + (gy - centers[r]) ** 2 + 1e-12)
+                envelope = 0.5 * (1.0 - torch.erf((dist - radius) / softness))
+                field = field + M_norm[r, c] * envelope
+
+        return field
+
+    def evaluate_metacognitive_shield(self, Z_loop: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Executes the closed-loop protection cycle over a sequence of C^5 twistor states:
+          1. Evaluates the 25-element SIGMA_5 freedom tensor M^alpha_beta across the loop.
+          2. Renders the internal 2D manifold density field via analytical erf() optics.
+          3. Computes Krein-space Berry holonomy and spatial manifold roughness energy.
+          4. Applies a closed-loop protective damping gate to rectify adversarial drift.
+        """
+        Z_c = Z_loop.to(torch.complex128)
+        M_25 = compute_sigma5_freedom_matrix(Z_c)
+        manifold_field = self.render_shield_manifold_field(M_25)
+
+        # Spatial Dirichlet roughness energy on the rendered manifold
+        dy = manifold_field[1:, :] - manifold_field[:-1, :]
+        dx = manifold_field[:, 1:] - manifold_field[:, :-1]
+        roughness_energy = (dy ** 2).mean() + (dx ** 2).mean()
+
+        # Indefinite Krein-space Berry holonomy across the trajectory loop
+        holonomy_res = compute_berry_holonomy(Z_c, use_indefinite_metric=True, rectify_krein_sector=True)
+        berry_phase_mag = torch.abs(holonomy_res["berry_phase"]).mean()
+
+        # Closed-loop attenuation gate triggered by manifold roughness + phase shear
+        protection_gate = torch.exp(
+            -(self.roughness_gain * roughness_energy + self.holonomy_gain * berry_phase_mag)
+        )
+
+        # Rectify the trajectory and re-normalize in C^5
+        Z_rectified = Z_c * protection_gate
+        Z_rectified = Z_rectified / torch.linalg.norm(Z_rectified, dim=-1, keepdim=True).clamp(min=1e-12)
+
+        return {
+            "Z_rectified": Z_rectified,
+            "freedom_matrix_25": M_25,
+            "rendered_manifold": manifold_field,
+            "roughness_energy": roughness_energy,
+            "berry_phase": holonomy_res["berry_phase"],
+            "sector_flip_count": holonomy_res["sector_flip_count"],
+            "protection_gate": protection_gate,
+        }

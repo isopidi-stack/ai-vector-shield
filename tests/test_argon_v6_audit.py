@@ -21,6 +21,7 @@ from argon_v6_core import (
     compute_sigma5_freedom_matrix,
     build_five_quantum_twistor_state,
     apply_googly_chiral_patch_coupling,
+    MetacognitiveShieldProtector,
 )
 
 
@@ -146,10 +147,37 @@ def test_penrose_five_quantum_rules_and_25_sigma5_freedoms():
     assert torch.allclose(torch.matmul(U, U.conj().transpose(-1, -2)), I5, atol=1e-12)
 
 
+def test_metacognitive_shield_closed_loop_protection():
+    """
+    Verifies the closed-loop MetacognitiveShieldProtector inside ai-vector-shield:
+      1. Projects 25-element SIGMA_5 states into a continuous 2D manifold field.
+      2. Detects both spatial roughness energy and Krein-space Berry phase shear.
+      3. Outputs a unit-normalized rectified trajectory with valid protection gating.
+    """
+    torch.manual_seed(42)
+    Z_seq = torch.randn(12, 5, dtype=torch.complex128)
+    Z_seq = Z_seq / torch.linalg.norm(Z_seq, dim=-1, keepdim=True)
+
+    protector = MetacognitiveShieldProtector(resolution=20, roughness_gain=0.35, holonomy_gain=0.25)
+    out = protector.evaluate_metacognitive_shield(Z_seq)
+
+    assert out["freedom_matrix_25"].shape == (12, 5, 5)
+    assert out["freedom_matrix_25"][0].numel() == 25
+    assert out["rendered_manifold"].shape == (20, 20)
+    assert out["roughness_energy"] > 0.0
+    assert 0.0 < float(out["protection_gate"].item()) <= 1.0
+    assert torch.allclose(
+        torch.linalg.norm(out["Z_rectified"], dim=-1),
+        torch.ones(12, dtype=torch.float64),
+        atol=1e-12
+    )
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"[PASS] {name}")
+
 
 
