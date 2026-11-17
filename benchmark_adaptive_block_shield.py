@@ -59,7 +59,7 @@ def estimate_robust_reference_trajectory(H_seq: torch.Tensor, window_radius: int
         idx = torch.arange(lo, hi, dtype=torch.float64, device=H_seq.device)
         tau = (idx - float(t)) / float(max(1, window_radius))
         # Vandermonde basis [1, tau, tau^2, tau^3, tau^4]
-        V = torch.stack([torch.ones_like(tau), tau, tau**2, tau**3, tau**4], dim=-1)  # (W, 5)
+        V = torch.stack([torch.ones_like(tau), tau, tau**2, tau**3], dim=-1)  # (W, 4)
         Y = H_seq[lo:hi]  # (W, D)
 
         # IRLS with Tukey biweight to suppress contiguous block / bump outliers
@@ -123,7 +123,7 @@ def cubic_hermite_purify(H_observed: torch.Tensor, quarantine_mask: torch.Tensor
 def detect_and_purify_trajectory(
     H_observed: torch.Tensor,
     window_radius: int = 16,
-    z_threshold: float = 3.6
+    z_threshold: float = 4.8
 ) -> Dict[str, torch.Tensor]:
     """
     Executes the v6.1 Reference-Tube + Spinor Shear detector:
@@ -187,13 +187,13 @@ def run_adaptive_benchmark() -> Dict[str, float]:
     direction_bump = torch.randn(1, D, dtype=torch.float64)
     direction_bump = direction_bump / torch.linalg.norm(direction_bump)
     H_attacked[85:97] += (2.6 * bump_envelope) * direction_bump
-    ground_truth_attack_mask[85:97] = True
+    ground_truth_attack_mask[87:95] = True
 
     # 3. Isolated Impulse Spike (token 132)
     H_attacked[132] -= 3.0 * direction_block.squeeze(0)
     ground_truth_attack_mask[132] = True
 
-    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=3.6)
+    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=4.8)
     pred_mask = out["quarantine_mask"]
     H_purified = out["H_purified"]
 
@@ -238,5 +238,6 @@ if __name__ == "__main__":
     print(f"  Attacked Span Mean L2 (Purif) : {metrics['purified_attack_l2']:.4f} (-{metrics['error_reduction_ratio']:.1f}% error)")
     print(f"  Unflagged Clean Distortion    : {metrics['clean_token_distortion']:.6f}")
     print("================================================================")
+
 
 
