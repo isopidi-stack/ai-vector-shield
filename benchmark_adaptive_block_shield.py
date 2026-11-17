@@ -47,13 +47,12 @@ def compute_spinor_directional_shear(H_seq: torch.Tensor) -> torch.Tensor:
 def estimate_robust_reference_trajectory(
     H_seq: torch.Tensor,
     window_radius: int = 16,
-    valid_mask: torch.Tensor = None
+    valid_mask: torch.Tensor = None,
+    degree: int = 4
 ) -> torch.Tensor:
     """
-    Constructs a clean reference trajectory H_ref via IRLS local degree-4 polynomial
-    regression with Tukey biweight outlier rejection (and optional clean-token masking).
-    Tracks multi-frequency harmonic carrier waves to sensor-noise precision (~0.24 L2)
-    while rejecting contiguous block shifts and smooth Gaussian bumps.
+    Constructs a clean reference trajectory H_ref via IRLS local polynomial regression
+    with Tukey biweight outlier rejection and optional clean-token masking.
     """
     T, D = H_seq.shape
     H_ref = torch.zeros_like(H_seq)
@@ -62,12 +61,15 @@ def estimate_robust_reference_trajectory(
         hi = min(T, t + window_radius + 1)
         idx = torch.arange(lo, hi, dtype=torch.float64, device=H_seq.device)
         tau = (idx - float(t)) / float(max(1, window_radius))
-        V = torch.stack([torch.ones_like(tau), tau, tau**2, tau**3, tau**4], dim=-1)  # (W, 5)
-        Y = H_seq[lo:hi]  # (W, D)
+        powers = [torch.ones_like(tau), tau, tau**2, tau**3]
+        if degree >= 4:
+            powers.append(tau**4)
+        V = torch.stack(powers, dim=-1)
+        Y = H_seq[lo:hi]
 
         if valid_mask is not None:
             w = valid_mask[lo:hi].to(torch.float64)
-            if w.sum() < 6.0:
+            if w.sum() < float(degree + 2):
                 w = torch.ones(Y.shape[0], dtype=torch.float64, device=H_seq.device)
         else:
             w = torch.ones(Y.shape[0], dtype=torch.float64, device=H_seq.device)
@@ -78,12 +80,12 @@ def estimate_robust_reference_trajectory(
             pred = V @ coeffs
             res = torch.linalg.norm(Y - pred, dim=-1)
             active_res = res[w > 0.1] if (w > 0.1).sum() >= 5 else res
-            mad = torch.median(active_res).clamp(min=0.05)
+            mad = torch.median(active_res).clamp(min=0.04)
             u = res / (4.685 * 1.4826 * mad)
             new_w = torch.where(u < 1.0, (1.0 - u**2) ** 2, torch.zeros_like(u))
             if valid_mask is not None:
                 new_w = new_w * valid_mask[lo:hi].to(torch.float64)
-            if new_w.sum() < 6.0:
+            if new_w.sum() < float(degree + 2):
                 break
             w = new_w
         H_ref[t] = coeffs[0]
@@ -93,12 +95,12 @@ def estimate_robust_reference_trajectory(
 def detect_and_purify_trajectory(
     H_observed: torch.Tensor,
     window_radius: int = 16,
-    z_threshold: float = 3.45
+    z_threshold: float = 4.05
 ) -> Dict[str, torch.Tensor]:
     """
     Executes the v6.1 Reference-Tube + Spinor Shear detector:
         Q_t = I_t OR B_t
-    followed by a clean-anchor degree-4 IRLS manifold reconstruction on quarantined spans.
+    with cluster-shoulder dilation and clean-masked cubic manifold reconstruction.
     """
     # 1. Spinor directional shear statistic (impulse detector I_t)
     shear_t = compute_spinor_directional_shear(H_observed)
@@ -107,22 +109,30 @@ def detect_and_purify_trajectory(
     I_t = (shear_t - shear_med) > (z_threshold * 1.4826 * shear_mad)
 
     # 2. Reference-tube residual statistic (block & smooth Gaussian bump detector B_t)
-    H_ref_init = estimate_robust_reference_trajectory(H_observed, window_radius=window_radius)
+    H_ref_init = estimate_robust_reference_trajectory(H_observed, window_radius=window_radius, degree=4)
     residual_t = torch.linalg.norm(H_observed - H_ref_init, dim=-1)
     res_med = torch.median(residual_t)
-    res_mad = torch.median(torch.abs(residual_t - res_med)).clamp(min=0.032)
+    res_mad = torch.median(torch.abs(residual_t - res_med)).clamp(min=0.04)
     B_t = (residual_t - res_med) > (z_threshold * 1.4826 * res_mad)
 
     quarantine_mask = I_t | B_t
-    # Close 1-token interior gaps inside contiguous attack spans
+    # Close 1-token interior gaps
     gap_fill = quarantine_mask[:-2] & quarantine_mask[2:]
     quarantine_mask[1:-1] = quarantine_mask[1:-1] | gap_fill
 
-    # 3. Re-fit clean reference strictly on unquarantined tokens to purify flagged spans
+    # Dilate contiguous clusters (length >= 3) by 1 token on each side to capture attack shoulders
+    core_runs = quarantine_mask[:-2] & quarantine_mask[1:-1] & quarantine_mask[2:]
+    dilated = quarantine_mask.clone()
+    dilated[:-2] = dilated[:-2] | core_runs
+    dilated[2:] = dilated[2:] | core_runs
+    quarantine_mask = dilated
+
+    # 3. Re-fit clean cubic reference strictly on unquarantined tokens to purify flagged spans
     H_ref_clean = estimate_robust_reference_trajectory(
         H_observed,
-        window_radius=window_radius + 8,
-        valid_mask=~quarantine_mask
+        window_radius=window_radius + 2,
+        valid_mask=~quarantine_mask,
+        degree=3
     )
     H_purified = torch.where(quarantine_mask.unsqueeze(-1), H_ref_clean, H_observed)
 
@@ -172,7 +182,7 @@ def run_adaptive_benchmark() -> Dict[str, float]:
     H_attacked[132] -= 3.0 * direction_block.squeeze(0)
     ground_truth_attack_mask[132] = True
 
-    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=3.45)
+    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=4.05)
     pred_mask = out["quarantine_mask"]
     H_purified = out["H_purified"]
 
@@ -217,6 +227,7 @@ if __name__ == "__main__":
     print(f"  Attacked Span Mean L2 (Purif) : {metrics['purified_attack_l2']:.4f} (-{metrics['error_reduction_ratio']:.1f}% error)")
     print(f"  Unflagged Clean Distortion    : {metrics['clean_token_distortion']:.6f}")
     print("================================================================")
+
 
 
 
