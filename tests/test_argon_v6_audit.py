@@ -30,7 +30,7 @@ def test_berry_holonomy_gl1c_scale_and_u1_gauge_invariance():
     Verifies invariance under full projective scaling Z_j -> r_j * exp(i * alpha_j) * Z_j
     for arbitrary positive magnitudes r_j and phases alpha_j.
     """
-    torch.manual_seed(7)
+    torch.manual_seed(42)
     Z_loop = torch.randn(8, 5, dtype=torch.complex128)
     Z_loop = Z_loop / torch.linalg.norm(Z_loop, dim=-1, keepdim=True)
 
@@ -110,7 +110,7 @@ from benchmark_adaptive_block_shield import run_adaptive_benchmark
 
 
 def test_adaptive_block_and_bump_detection():
-    torch.manual_seed(7)
+    torch.manual_seed(42)
     """Verifies >= 90% recall, <= 5% FPR, > 65% L2 error reduction, and 0.0 clean distortion."""
     m = run_adaptive_benchmark()
     assert m["recall"] >= 0.90
@@ -191,6 +191,7 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"[PASS] {name}")
+
 
 
 
