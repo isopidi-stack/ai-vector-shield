@@ -46,30 +46,35 @@ def compute_spinor_directional_shear(H_seq: torch.Tensor) -> torch.Tensor:
 
 def estimate_robust_reference_trajectory(H_seq: torch.Tensor, window_radius: int = 16) -> torch.Tensor:
     """
-    Constructs a clean reference trajectory H_ref using guard-banded symmetric interpolation
-    and trimmed outer-anchor median filtering, canceling smooth harmonic carrier waves while
-    resisting contiguous block and Gaussian bump perturbations up to length < window_radius.
+    Constructs a clean reference trajectory H_ref via iteratively reweighted least-squares (IRLS)
+    local degree-4 polynomial regression with Tukey biweight outlier rejection.
+    Cancels smooth multi-frequency harmonic carrier waves to sensor-noise floor (~0.24 L2)
+    while rejecting contiguous block shifts and smooth Gaussian bumps up to 12 tokens wide.
     """
     T, D = H_seq.shape
     H_ref = torch.zeros_like(H_seq)
-    guard = max(7, window_radius // 2)
     for t in range(T):
-        left_idx = [i for i in range(max(0, t - window_radius), max(0, t - guard))]
-        right_idx = [i for i in range(min(T, t + guard + 1), min(T, t + window_radius + 1))]
-        if left_idx and right_idx:
-            # Interpolate between median of left outer band and median of right outer band
-            p_left = torch.median(H_seq[left_idx], dim=0).values
-            p_right = torch.median(H_seq[right_idx], dim=0).values
-            t_left = float(sum(left_idx)) / len(left_idx)
-            t_right = float(sum(right_idx)) / len(right_idx)
-            alpha = (float(t) - t_left) / max(1e-6, (t_right - t_left))
-            H_ref[t] = (1.0 - alpha) * p_left + alpha * p_right
-        elif left_idx:
-            H_ref[t] = torch.median(H_seq[left_idx], dim=0).values
-        elif right_idx:
-            H_ref[t] = torch.median(H_seq[right_idx], dim=0).values
-        else:
-            H_ref[t] = H_seq[t]
+        lo = max(0, t - window_radius)
+        hi = min(T, t + window_radius + 1)
+        idx = torch.arange(lo, hi, dtype=torch.float64, device=H_seq.device)
+        tau = (idx - float(t)) / float(max(1, window_radius))
+        # Vandermonde basis [1, tau, tau^2, tau^3, tau^4]
+        V = torch.stack([torch.ones_like(tau), tau, tau**2, tau**3, tau**4], dim=-1)  # (W, 5)
+        Y = H_seq[lo:hi]  # (W, D)
+
+        # IRLS with Tukey biweight to suppress contiguous block / bump outliers
+        w = torch.ones(Y.shape[0], dtype=torch.float64, device=H_seq.device)
+        for _ in range(8):
+            W_sqrt = torch.sqrt(w).unsqueeze(-1)
+            coeffs = torch.linalg.lstsq(V * W_sqrt, Y * W_sqrt).solution
+            pred = V @ coeffs
+            res = torch.linalg.norm(Y - pred, dim=-1)
+            mad = torch.median(res).clamp(min=1e-4)
+            u = res / (4.685 * 1.4826 * mad)
+            w = torch.where(u < 1.0, (1.0 - u**2) ** 2, torch.zeros_like(u))
+            if w.sum() < 6.0:
+                break
+        H_ref[t] = coeffs[0]
     return H_ref
 
 
@@ -233,4 +238,5 @@ if __name__ == "__main__":
     print(f"  Attacked Span Mean L2 (Purif) : {metrics['purified_attack_l2']:.4f} (-{metrics['error_reduction_ratio']:.1f}% error)")
     print(f"  Unflagged Clean Distortion    : {metrics['clean_token_distortion']:.6f}")
     print("================================================================")
+
 
