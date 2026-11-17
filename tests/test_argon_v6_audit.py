@@ -174,11 +174,24 @@ def test_metacognitive_shield_closed_loop_protection():
     )
 
 
+def test_projective_cp3_mandelbrot_shield_projection():
+    """Verifies native trigonometry-free CP^3 Mandelbrot projection + closed-loop shield gating."""
+    torch.manual_seed(23)
+    enc = ProjectiveCP3MandelbrotEncoder(iterations=16)
+    protector = MetacognitiveShieldProtector(resolution=16)
+    tokens = torch.randn(10, 24, dtype=torch.float64)
+    f_out = enc.iterate_cp3_mandelbrot_orbit(tokens)
+    s_out = protector.evaluate_metacognitive_shield(f_out["Z5_cp3_mandelbrot"])
+    assert s_out["freedom_matrix_25"].shape == (10, 5, 5)
+    assert 0.0 < float(s_out["protection_gate"].item()) <= 1.0
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"[PASS] {name}")
+
 
 
 
