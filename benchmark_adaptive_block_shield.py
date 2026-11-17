@@ -44,18 +44,32 @@ def compute_spinor_directional_shear(H_seq: torch.Tensor) -> torch.Tensor:
     return chordal_shear.mean(dim=-1)  # (T,)
 
 
-def estimate_robust_reference_trajectory(H_seq: torch.Tensor, window_radius: int = 14) -> torch.Tensor:
+def estimate_robust_reference_trajectory(H_seq: torch.Tensor, window_radius: int = 16) -> torch.Tensor:
     """
-    Constructs a clean reference trajectory H_ref using a wide-window trimmed median filter
-    resistant to contiguous block perturbations up to length < window_radius.
+    Constructs a clean reference trajectory H_ref using guard-banded symmetric interpolation
+    and trimmed outer-anchor median filtering, canceling smooth harmonic carrier waves while
+    resisting contiguous block and Gaussian bump perturbations up to length < window_radius.
     """
     T, D = H_seq.shape
     H_ref = torch.zeros_like(H_seq)
+    guard = max(7, window_radius // 2)
     for t in range(T):
-        lo = max(0, t - window_radius)
-        hi = min(T, t + window_radius + 1)
-        window = H_seq[lo:hi]  # (W, D)
-        H_ref[t] = torch.median(window, dim=0).values
+        left_idx = [i for i in range(max(0, t - window_radius), max(0, t - guard))]
+        right_idx = [i for i in range(min(T, t + guard + 1), min(T, t + window_radius + 1))]
+        if left_idx and right_idx:
+            # Interpolate between median of left outer band and median of right outer band
+            p_left = torch.median(H_seq[left_idx], dim=0).values
+            p_right = torch.median(H_seq[right_idx], dim=0).values
+            t_left = float(sum(left_idx)) / len(left_idx)
+            t_right = float(sum(right_idx)) / len(right_idx)
+            alpha = (float(t) - t_left) / max(1e-6, (t_right - t_left))
+            H_ref[t] = (1.0 - alpha) * p_left + alpha * p_right
+        elif left_idx:
+            H_ref[t] = torch.median(H_seq[left_idx], dim=0).values
+        elif right_idx:
+            H_ref[t] = torch.median(H_seq[right_idx], dim=0).values
+        else:
+            H_ref[t] = H_seq[t]
     return H_ref
 
 
@@ -219,3 +233,4 @@ if __name__ == "__main__":
     print(f"  Attacked Span Mean L2 (Purif) : {metrics['purified_attack_l2']:.4f} (-{metrics['error_reduction_ratio']:.1f}% error)")
     print(f"  Unflagged Clean Distortion    : {metrics['clean_token_distortion']:.6f}")
     print("================================================================")
+
