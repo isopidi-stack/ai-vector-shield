@@ -95,7 +95,7 @@ def estimate_robust_reference_trajectory(
 def detect_and_purify_trajectory(
     H_observed: torch.Tensor,
     window_radius: int = 16,
-    z_threshold: float = 4.05
+    z_threshold: float = 3.55
 ) -> Dict[str, torch.Tensor]:
     """
     Executes the v6.1 Reference-Tube + Spinor Shear detector:
@@ -120,21 +120,17 @@ def detect_and_purify_trajectory(
     gap_fill = quarantine_mask[:-2] & quarantine_mask[2:]
     quarantine_mask[1:-1] = quarantine_mask[1:-1] | gap_fill
 
-    # Dilate contiguous clusters (length >= 3) by 1 token on each side to capture attack shoulders
-    core_runs = quarantine_mask[:-2] & quarantine_mask[1:-1] & quarantine_mask[2:]
-    dilated = quarantine_mask.clone()
-    dilated[:-2] = dilated[:-2] | core_runs
-    dilated[2:] = dilated[2:] | core_runs
-    quarantine_mask = dilated
 
-    # 3. Re-fit clean cubic reference strictly on unquarantined tokens to purify flagged spans
-    H_ref_clean = estimate_robust_reference_trajectory(
-        H_observed,
-        window_radius=window_radius + 2,
-        valid_mask=~quarantine_mask,
-        degree=3
-    )
-    H_purified = torch.where(quarantine_mask.unsqueeze(-1), H_ref_clean, H_observed)
+
+    # 3. Global minimum-curvature spline reconstruction (D_2^T D_2 + D_3^T D_3) anchored on unquarantined tokens
+    T_len = H_observed.shape[0]
+    eye = torch.eye(T_len, dtype=torch.float64, device=H_observed.device)
+    D2 = eye[2:] - 2.0 * eye[1:-1] + eye[:-2]
+    D3 = eye[3:] - 3.0 * eye[2:-1] + 3.0 * eye[1:-2] - eye[:-3]
+    W_diag = (~quarantine_mask).to(torch.float64)
+    A_sys = torch.diag(W_diag) + 12.0 * (D2.T @ D2) + 45.0 * (D3.T @ D3)
+    H_spline = torch.linalg.solve(A_sys, W_diag.unsqueeze(-1) * H_observed)
+    H_purified = torch.where(quarantine_mask.unsqueeze(-1), H_spline, H_observed)
 
     return {
         "quarantine_mask": quarantine_mask,
@@ -182,7 +178,7 @@ def run_adaptive_benchmark() -> Dict[str, float]:
     H_attacked[132] -= 3.0 * direction_block.squeeze(0)
     ground_truth_attack_mask[132] = True
 
-    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=4.05)
+    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=3.55)
     pred_mask = out["quarantine_mask"]
     H_purified = out["H_purified"]
 
@@ -227,6 +223,7 @@ if __name__ == "__main__":
     print(f"  Attacked Span Mean L2 (Purif) : {metrics['purified_attack_l2']:.4f} (-{metrics['error_reduction_ratio']:.1f}% error)")
     print(f"  Unflagged Clean Distortion    : {metrics['clean_token_distortion']:.6f}")
     print("================================================================")
+
 
 
 
