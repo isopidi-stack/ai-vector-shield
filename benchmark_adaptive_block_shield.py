@@ -95,7 +95,7 @@ def estimate_robust_reference_trajectory(
 def detect_and_purify_trajectory(
     H_observed: torch.Tensor,
     window_radius: int = 16,
-    z_threshold: float = 3.55
+    z_threshold: float = 3.78
 ) -> Dict[str, torch.Tensor]:
     """
     Executes the v6.1 Reference-Tube + Spinor Shear detector:
@@ -128,7 +128,7 @@ def detect_and_purify_trajectory(
     D2 = eye[2:] - 2.0 * eye[1:-1] + eye[:-2]
     D3 = eye[3:] - 3.0 * eye[2:-1] + 3.0 * eye[1:-2] - eye[:-3]
     W_diag = (~quarantine_mask).to(torch.float64)
-    A_sys = torch.diag(W_diag) + 12.0 * (D2.T @ D2) + 45.0 * (D3.T @ D3)
+    A_sys = torch.diag(W_diag) + 4.5 * (D2.T @ D2) + 2.0 * (D3.T @ D3)
     H_spline = torch.linalg.solve(A_sys, W_diag.unsqueeze(-1) * H_observed)
     H_purified = torch.where(quarantine_mask.unsqueeze(-1), H_spline, H_observed)
 
@@ -178,7 +178,7 @@ def run_adaptive_benchmark() -> Dict[str, float]:
     H_attacked[132] -= 3.0 * direction_block.squeeze(0)
     ground_truth_attack_mask[132] = True
 
-    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=3.55)
+    out = detect_and_purify_trajectory(H_attacked, window_radius=16, z_threshold=3.78)
     pred_mask = out["quarantine_mask"]
     H_purified = out["H_purified"]
 
@@ -223,6 +223,7 @@ if __name__ == "__main__":
     print(f"  Attacked Span Mean L2 (Purif) : {metrics['purified_attack_l2']:.4f} (-{metrics['error_reduction_ratio']:.1f}% error)")
     print(f"  Unflagged Clean Distortion    : {metrics['clean_token_distortion']:.6f}")
     print("================================================================")
+
 
 
 
