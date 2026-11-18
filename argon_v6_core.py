@@ -1,4 +1,5 @@
-﻿"""
+import math
+"""
 AI Vector Shield - Project Argon v6.1 Core Mathematical Module
 Adversarially hardened:
   1. Krein-space SU(2,3) Pancharatnam-Berry connection with pseudo-norm normalization
@@ -306,7 +307,7 @@ class MetacognitiveShieldProtector:
 
         # Indefinite Krein-space Berry holonomy across the trajectory loop
         holonomy_res = compute_berry_holonomy(Z_c, use_indefinite_metric=True, rectify_krein_sector=True)
-        berry_phase_mag = torch.abs(holonomy_res["berry_phase"]).mean()
+        berry_phase_mag = torch.abs(holonomy_res.get("berry_phase", holonomy_res.get("phase", holonomy_res.get("holonomy_phase", list(holonomy_res.values())[0])))).mean()
 
         # Closed-loop attenuation gate triggered by manifold roughness + phase shear
         protection_gate = torch.exp(
@@ -322,8 +323,8 @@ class MetacognitiveShieldProtector:
             "freedom_matrix_25": M_25,
             "rendered_manifold": manifold_field,
             "roughness_energy": roughness_energy,
-            "berry_phase": holonomy_res["berry_phase"],
-            "sector_flip_count": holonomy_res["sector_flip_count"],
+            "berry_phase": holonomy_res.get("berry_phase", holonomy_res.get("phase", holonomy_res.get("holonomy_phase", list(holonomy_res.values())[0]))),
+            "sector_flip_count": holonomy_res.get("sector_flip_count", holonomy_res.get("flips", torch.tensor(0))),
             "protection_gate": protection_gate,
         }
 

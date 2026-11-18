@@ -1,4 +1,5 @@
-﻿"""
+from argon_v6_core import ProjectiveCP3MandelbrotEncoder
+"""
 Standalone Adversarial Audit Suite for AI Vector Shield - Project Argon v6.1
 Verifies:
   1. General GL(1, C) complex scale + U(1) gauge invariance Z_j -> r_j exp(i alpha_j) Z_j

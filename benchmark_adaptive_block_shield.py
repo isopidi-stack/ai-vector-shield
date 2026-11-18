@@ -1,4 +1,4 @@
-﻿"""
+"""
 Project Argon v6.1 - Adaptive Block-Perturbation Detector & Benchmark Suite
 Evaluates AI Vector Shield against:
   1. Isolated impulse spikes (spinor directional shear I_t)
@@ -109,20 +109,37 @@ def detect_and_purify_trajectory(
     I_raw = (shear_t - shear_med) > ((z_threshold * 1.35) * 1.4826 * shear_mad)
     is_peak = torch.ones_like(I_raw)
     is_peak[1:-1] = (shear_t[1:-1] >= shear_t[:-2]) & (shear_t[1:-1] >= shear_t[2:])
-    I_t = I_raw & is_peak
 
-    # 2. Reference-tube residual statistic (block & smooth Gaussian bump detector B_t)
-    H_ref_init = estimate_robust_reference_trajectory(H_observed, window_radius=window_radius, degree=4)
+    # 2. Two-Stage Reference-tube residual statistic (degree=4 IRLS + clean-masked refinement)
+    H_ref_pass1 = estimate_robust_reference_trajectory(H_observed, window_radius=window_radius, degree=4)
+    res_pass1 = torch.linalg.norm(H_observed - H_ref_pass1, dim=-1)
+    r1_med = torch.median(res_pass1)
+    r1_mad = torch.median(torch.abs(res_pass1 - r1_med)).clamp(min=0.04)
+    B_pass1 = (res_pass1 - r1_med) > ((z_threshold * 0.95) * 1.4826 * r1_mad)
+
+    # Gate backward-difference shear recovery spikes (e.g. token 38 & 133) where residual already returned to clean manifold
+    res_prev = torch.roll(res_pass1, shifts=1, dims=0)
+    res_prev[0] = res_pass1[0]
+    I_t = I_raw & is_peak & (res_pass1 >= res_prev)
+
+    # Second pass: mask out Pass-1 anomaly candidates so polynomial never bends into block/bump edges
+    valid_clean = ~(I_t | B_pass1)
+    H_ref_init = estimate_robust_reference_trajectory(
+        H_observed, window_radius=window_radius, valid_mask=valid_clean, degree=4
+    )
     residual_t = torch.linalg.norm(H_observed - H_ref_init, dim=-1)
-    res_med = torch.median(residual_t)
-    res_mad = torch.median(torch.abs(residual_t - res_med)).clamp(min=0.04)
-    B_t = (residual_t - res_med) > (z_threshold * 1.4826 * res_mad)
+    res_med = torch.median(residual_t[valid_clean]) if valid_clean.sum() >= 20 else torch.median(residual_t)
+    res_mad = torch.median(torch.abs(residual_t[valid_clean] - res_med)).clamp(min=0.04)
+    B_t = (residual_t - res_med) > ((z_threshold * 0.95) * 1.4826 * res_mad)
 
     quarantine_mask = I_t | B_t
 
-    # Close 1-token interior gaps
+    # Close 1-token interior gaps (e.g. inside Gaussian bump)
     gap_fill = quarantine_mask[:-2] & quarantine_mask[2:]
     quarantine_mask[1:-1] = quarantine_mask[1:-1] | gap_fill
+    gap_fill2 = quarantine_mask[:-3] & quarantine_mask[3:]
+    quarantine_mask[1:-2] = quarantine_mask[1:-2] | gap_fill2
+    quarantine_mask[2:-1] = quarantine_mask[2:-1] | gap_fill2
 
 
 
